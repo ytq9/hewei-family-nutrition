@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mergeMealsByDateAndSlot } from "./meals.ts";
 import type { Meal, Member, Recipe, ShoppingItem, VitalRecord } from "./types";
 
 export const LOCAL_DATA_KEY = "hewei-local-data-v1";
@@ -121,7 +122,8 @@ const backupSchema = z.object({
 });
 
 export function parseLocalData(raw: string): LocalDataBundle {
-  return localDataSchema.parse(JSON.parse(raw));
+  const data = localDataSchema.parse(JSON.parse(raw));
+  return { ...data, meals: mergeMealsByDateAndSlot(data.meals) };
 }
 
 export function createLocalBackup(data: LocalDataBundle) {
@@ -134,5 +136,6 @@ export function createLocalBackup(data: LocalDataBundle) {
 }
 
 export function parseLocalBackup(raw: string): LocalDataBundle {
-  return backupSchema.parse(JSON.parse(raw)).data;
+  const data = backupSchema.parse(JSON.parse(raw)).data;
+  return { ...data, meals: mergeMealsByDateAndSlot(data.meals) };
 }

@@ -45,6 +45,7 @@ import {
 } from "./lib/demo-data";
 import { createLocalBackup, LOCAL_DATA_KEY, parseLocalBackup, parseLocalData } from "./lib/local-data";
 import type { LocalDataBundle } from "./lib/local-data";
+import { addOrMergeMeal, mergeMealsByDateAndSlot } from "./lib/meals";
 import {
   allocateRecipe,
   calculateRecipe,
@@ -358,8 +359,15 @@ export default function NutritionApp() {
   };
 
   const copyMeal = (meal: Meal) => {
-    const newMeal: Meal = { ...meal, id: `${meal.id}-${Date.now()}`, date: addDays(meal.date, 1), status: "planned" };
-    setMeals((current) => [...current, newMeal]);
+    const stamp = Date.now();
+    const newMeal: Meal = {
+      ...structuredClone(meal),
+      id: `${meal.id}-${stamp}`,
+      date: addDays(meal.date, 1),
+      status: "planned",
+      dishes: meal.dishes.map((dish, index) => ({ ...structuredClone(dish), id: `${dish.id}-${stamp}-${index}` })),
+    };
+    setMeals((current) => addOrMergeMeal(current, newMeal));
     notify("已复制到明天");
   };
 
@@ -371,6 +379,15 @@ export default function NutritionApp() {
   const deleteMeal = (mealId: string) => {
     setMeals((current) => current.filter((meal) => meal.id !== mealId));
     notify("餐次已删除");
+  };
+
+  const deleteDish = (mealId: string, dishId: string) => {
+    setMeals((current) => current.flatMap((meal) => {
+      if (meal.id !== mealId) return [meal];
+      const dishes = meal.dishes.filter((dish) => dish.id !== dishId);
+      return dishes.length ? [{ ...meal, dishes, status: "planned" as const }] : [];
+    }));
+    notify("菜品已从该餐移除");
   };
 
   const duplicateRecipe = (recipe: Recipe) => {
@@ -385,27 +402,29 @@ export default function NutritionApp() {
   };
 
   const addRecipeToMenu = (recipe: Recipe, slot: MealSlot, time: string, participantIds: string[]) => {
+    const stamp = Date.now();
+    const existingMeal = meals.find((meal) => meal.date === selectedMealDate && meal.slot === slot);
     const newMeal: Meal = {
-      id: `meal-${Date.now()}`,
+      id: `meal-${stamp}`,
       date: selectedMealDate,
       slot,
       status: "planned",
       time,
       participantIds,
       dishes: [{
-        id: `dish-${Date.now()}`,
+        id: `dish-${stamp}`,
         recipeId: recipe.id,
         recipeSnapshot: structuredClone(recipe),
         allocationMode: "servings",
         allocations: Object.fromEntries(participantIds.map((memberId) => [memberId, 1])),
       }],
     };
-    setMeals((current) => [...current, newMeal]);
+    setMeals((current) => addOrMergeMeal(current, newMeal));
     setActiveTab("menu");
     setModal(null);
     setPlacingRecipeId(null);
     setPlacingMealSlot(null);
-    notify(`${recipe.name} 已加入${formatMenuDate(selectedMealDate)}的${slotMeta[slot].label}`);
+    notify(existingMeal ? `${recipe.name} 已加入现有${slotMeta[slot].label}，共 ${existingMeal.dishes.length + 1} 道菜` : `${recipe.name} 已加入${formatMenuDate(selectedMealDate)}的${slotMeta[slot].label}`);
   };
 
   const saveMealDetails = (updated: Meal) => {
@@ -413,7 +432,7 @@ export default function NutritionApp() {
     const changed = previous ? previous.slot !== updated.slot || previous.time !== updated.time || [...previous.participantIds].sort().join("|") !== [...updated.participantIds].sort().join("|") : true;
     const needsReconfirm = previous?.status === "confirmed" && changed;
     const next = { ...updated, status: needsReconfirm ? "planned" as const : updated.status };
-    setMeals((current) => current.map((meal) => meal.id === next.id ? next : meal));
+    setMeals((current) => mergeMealsByDateAndSlot(current.map((meal) => meal.id === next.id ? next : meal)));
     setModal(null);
     setEditingMeal(null);
     notify(needsReconfirm ? "餐次已修改，请重新确认实吃" : "餐次安排已保存");
@@ -431,7 +450,7 @@ export default function NutritionApp() {
   };
 
   const renderView = () => {
-    if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onEdit={(meal) => { setEditingMeal(meal); setModal("mealEdit"); }} onAdd={(slot) => { setPlacingRecipeId(null); setPlacingMealSlot(slot ?? null); setModal("meal"); }} />;
+    if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onRemoveDish={deleteDish} onEdit={(meal) => { setEditingMeal(meal); setModal("mealEdit"); }} onAdd={(slot, date) => { if (date) setSelectedMealDate(date); setPlacingRecipeId(null); setPlacingMealSlot(slot ?? null); setModal("meal"); }} />;
     if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onEdit={(recipe) => { setEditingRecipe(recipe); setModal("recipeEdit"); }} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={(recipe) => { setPlacingRecipeId(recipe.id); setPlacingMealSlot(null); setActiveTab("menu"); setModal("meal"); }} />;
     if (activeTab === "shopping") return <ShoppingView shopping={shopping} meals={meals} initialDate={selectedMealDate} setShopping={setShopping} notify={notify} />;
     if (activeTab === "family") return <FamilyView householdName={householdName} members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onEditHousehold={() => setModal("householdEdit")} onAddMember={() => setModal("member")} onEditMember={(member) => { setEditingMember(member); setModal("memberEdit"); }} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
@@ -493,7 +512,7 @@ export default function NutritionApp() {
       {modal === "data" && <LocalDataModal data={localData} close={() => setModal(null)} notify={notify} onImport={setLocalData} onReset={() => setLocalData(structuredClone(initialLocalData))} />}
       {modal === "recipe" && <RecipeModal close={() => setModal(null)} addRecipe={(recipe) => { setRecipes((current) => [recipe, ...current]); setModal(null); notify("菜谱已保存"); }} />}
       {modal === "recipeEdit" && editingRecipe && <RecipeEditModal recipe={editingRecipe} close={() => { setModal(null); setEditingRecipe(null); }} saveRecipe={(updated) => { setRecipes((current) => current.map((recipe) => recipe.id === updated.id ? updated : recipe)); setModal(null); setEditingRecipe(null); notify("菜谱修改已保存；历史餐食不受影响"); }} />}
-      {modal === "meal" && <MealPlacementModal recipes={recipes} members={members} selectedDate={selectedMealDate} initialRecipeId={placingRecipeId} initialSlot={placingMealSlot} close={() => { setModal(null); setPlacingRecipeId(null); setPlacingMealSlot(null); }} addMeal={addRecipeToMenu} />}
+      {modal === "meal" && <MealPlacementModal recipes={recipes} meals={meals} members={members} selectedDate={selectedMealDate} initialRecipeId={placingRecipeId} initialSlot={placingMealSlot} close={() => { setModal(null); setPlacingRecipeId(null); setPlacingMealSlot(null); }} addMeal={addRecipeToMenu} />}
       {modal === "mealEdit" && editingMeal && <MealEditModal meal={editingMeal} members={members} close={() => { setModal(null); setEditingMeal(null); }} saveMeal={saveMealDetails} />}
       {modal === "member" && <MemberModal close={() => setModal(null)} addMember={(member) => { setMembers((current) => [...current, member]); setModal(null); notify("家庭成员已添加"); }} />}
       {modal === "memberEdit" && editingMember && <MemberEditModal member={editingMember} close={() => { setModal(null); setEditingMember(null); }} saveMember={(updated) => { setMembers((current) => current.map((member) => member.id === updated.id ? updated : member)); setModal(null); setEditingMember(null); notify("成员档案已保存"); }} />}
@@ -540,9 +559,10 @@ function HomeView({ selectedMember, members, setSelectedMemberId, actualNutritio
         <div className="card-heading"><div><span className="eyebrow">今天 · 3 人参与</span><h3>今日餐单</h3></div><button className="round-button" onClick={() => onNavigate("menu")}><ChevronRight size={18} /></button></div>
         <div className="meal-list">{meals.map((meal) => {
           const meta = slotMeta[meal.slot];
-          const recipe = meal.dishes[0]?.recipeSnapshot;
-          const total = recipe ? calculateRecipe(recipe) : null;
-          return <article className="meal-item" key={meal.id}><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div><span>{meta.label} · {meal.time}</span><strong>{recipe?.name ?? "尚未安排"}</strong><small>{total ? `${Math.round((total.energyKcal ?? 0) / recipe.yieldServings)} kcal / 份` : "点击添加菜品"}</small></div>{meal.status === "confirmed" ? <span className="status confirmed"><Check size={14} />已确认</span> : <button className="status planned" onClick={() => onConfirm(meal.id)}>确认实吃</button>}</article>;
+          const names = meal.dishes.map((dish) => dish.recipeSnapshot.name).join("、");
+          const allocated = meal.dishes.map((dish) => allocateRecipe(dish.recipeSnapshot, dish.allocationMode, dish.allocations[selectedMember.id] ?? 0));
+          const energy = allocated.length ? sumVectors(allocated).energyKcal : null;
+          return <article className="meal-item" key={meal.id}><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div><span>{meta.label} · {meal.time}</span><strong>{names || "尚未安排"}</strong><small>{energy === null ? "营养数据不完整" : `${Math.round(energy)} kcal · ${meal.dishes.length} 道菜`}</small></div>{meal.status === "confirmed" ? <span className="status confirmed"><Check size={14} />已确认</span> : <button className="status planned" onClick={() => onConfirm(meal.id)}>确认实吃</button>}</article>;
         })}</div>
       </section>
 
@@ -555,7 +575,7 @@ function HomeView({ selectedMember, members, setSelectedMemberId, actualNutritio
   );
 }
 
-function MenuView({ meals, members, mode, setMode, selectedDate, todayDate, onSelectDate, onConfirm, onCopy, onReset, onDelete, onEdit, onAdd }: { meals: Meal[]; members: Member[]; mode: "today" | "week"; setMode: (mode: "today" | "week") => void; selectedDate: string; todayDate: string; onSelectDate: (date: string) => void; onConfirm: (id: string) => void; onCopy: (meal: Meal) => void; onReset: (id: string) => void; onDelete: (id: string) => void; onEdit: (meal: Meal) => void; onAdd: (slot?: MealSlot) => void }) {
+function MenuView({ meals, members, mode, setMode, selectedDate, todayDate, onSelectDate, onConfirm, onCopy, onReset, onDelete, onRemoveDish, onEdit, onAdd }: { meals: Meal[]; members: Member[]; mode: "today" | "week"; setMode: (mode: "today" | "week") => void; selectedDate: string; todayDate: string; onSelectDate: (date: string) => void; onConfirm: (id: string) => void; onCopy: (meal: Meal) => void; onReset: (id: string) => void; onDelete: (id: string) => void; onRemoveDish: (mealId: string, dishId: string) => void; onEdit: (meal: Meal) => void; onAdd: (slot?: MealSlot, date?: string) => void }) {
   const weekDateKeys = useMemo(() => getWeekDateKeys(selectedDate), [selectedDate]);
   const visibleMeals = meals
     .filter((meal) => mode === "today" ? meal.date === selectedDate : weekDateKeys.includes(meal.date))
@@ -580,9 +600,24 @@ function MenuView({ meals, members, mode, setMode, selectedDate, todayDate, onSe
       {visibleMeals.length === 0 && <section className="menu-empty"><CalendarDays size={27} /><h3>{mode === "today" ? "这一天还没有安排餐食" : "这一周还没有安排餐食"}</h3><p>选择“添加已有菜品”，从菜谱中安排这一餐。</p></section>}
       <div className={mode === "week" ? "week-plan" : "meal-plan"}>{visibleMeals.map((meal) => {
         const meta = slotMeta[meal.slot];
-        const recipe = meal.dishes[0]?.recipeSnapshot;
-        return <article className="plan-card" key={meal.id}><div className="plan-time"><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div>{mode === "week" && <span className="plan-date">{formatMenuDate(meal.date)}</span>}<strong>{meta.label}</strong><small><Clock3 size={14} />{meal.time}</small></div></div><div className="plan-food"><div className="food-thumb"><Apple size={26} /></div><div><span className="eyebrow">{recipe?.tags.join(" · ")}</span><h3>{recipe?.name}</h3><p>{recipe?.ingredients.map((ingredient) => ingredient.food.name).join("、")}</p><div className="participant-stack">{meal.participantIds.map((id) => { const member = members.find((item) => item.id === id); return member ? <span key={id} title={member.name}>{member.avatar}</span> : null; })}<small>{meal.participantIds.length} 人参与</small></div></div></div><div className="plan-nutrition"><span>预计每份</span><strong>{Math.round(((recipe && calculateRecipe(recipe).energyKcal) || 0) / (recipe?.yieldServings || 1))}<small> kcal</small></strong><span>蛋白质 {round(((recipe && calculateRecipe(recipe).proteinG) || 0) / (recipe?.yieldServings || 1), 1)}g</span></div><div className="plan-actions">{meal.status === "planned" ? <button className="primary-button" onClick={() => onConfirm(meal.id)}>确认实吃</button> : <span className="status confirmed"><Check size={14} />已确认</span>}<button className="icon-button meal-edit-button" onClick={() => onEdit(meal)} title="编辑餐别、时间和参与成员" aria-label={`编辑${meta.label}`}><Pencil size={17} /></button><button className="icon-button quick-copy" onClick={() => onCopy(meal)} title="复制到明天" aria-label={`复制${meta.label}到明天`}><ClipboardList size={18} /></button><OverflowMenu label={`${meta.label}更多操作`} actions={[{ label: "编辑餐次", icon: <Pencil size={16} />, onSelect: () => onEdit(meal) }, { label: "复制到明天", icon: <Copy size={16} />, onSelect: () => onCopy(meal) }, ...(meal.status === "confirmed" ? [{ label: "改回待确认", icon: <RefreshCw size={16} />, onSelect: () => onReset(meal.id) }] : []), { label: "删除此餐", icon: <Trash2 size={16} />, onSelect: () => onDelete(meal.id), danger: true }]} /></div></article>;
-      })}<button className="empty-meal" onClick={() => onAdd("snack")}><Plus size={20} /><span><strong>从已有菜谱添加加餐</strong><small>预选加餐，可修改时间和参与成员</small></span></button></div>
+        return <article className="plan-card" key={meal.id}>
+          <div className="plan-time"><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div>{mode === "week" && <span className="plan-date">{formatMenuDate(meal.date)}</span>}<strong>{meta.label}</strong><small><Clock3 size={14} />{meal.time}</small><em>{meal.dishes.length} 道菜</em></div></div>
+          <div className="plan-dishes">
+            {meal.dishes.map((dish) => {
+              const recipe = dish.recipeSnapshot;
+              const total = calculateRecipe(recipe);
+              return <div className="plan-dish" key={dish.id}>
+                <div className="food-thumb"><Apple size={23} /></div>
+                <div className="plan-dish-copy"><span className="eyebrow">{recipe.tags.join(" · ") || "自定义菜谱"}</span><h3>{recipe.name}</h3><p>{recipe.ingredients.map((ingredient) => ingredient.food.name).join("、")}</p></div>
+                <div className="plan-dish-nutrition"><span>预计每份</span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}<small> kcal</small></strong><span>蛋白质 {round((total.proteinG ?? 0) / recipe.yieldServings, 1)}g</span></div>
+                <button className="dish-remove-button" onClick={() => onRemoveDish(meal.id, dish.id)} title="从本餐移除" aria-label={`从${meta.label}移除${recipe.name}`}><Trash2 size={15} /></button>
+              </div>;
+            })}
+            <div className="plan-meal-footer"><div className="participant-stack">{meal.participantIds.map((id) => { const member = members.find((item) => item.id === id); return member ? <span key={id} title={member.name}>{member.avatar}</span> : null; })}<small>{meal.participantIds.length} 人参与</small></div><button onClick={() => onAdd(meal.slot, meal.date)}><Plus size={15} />向本餐添加菜品</button></div>
+          </div>
+          <div className="plan-actions">{meal.status === "planned" ? <button className="primary-button" onClick={() => onConfirm(meal.id)}>确认实吃</button> : <span className="status confirmed"><Check size={14} />已确认</span>}<button className="icon-button meal-edit-button" onClick={() => onEdit(meal)} title="编辑餐别、时间和参与成员" aria-label={`编辑${meta.label}`}><Pencil size={17} /></button><button className="icon-button quick-copy" onClick={() => onCopy(meal)} title="复制整餐到明天" aria-label={`复制${meta.label}到明天`}><ClipboardList size={18} /></button><OverflowMenu label={`${meta.label}更多操作`} actions={[{ label: "编辑餐次", icon: <Pencil size={16} />, onSelect: () => onEdit(meal) }, { label: "向本餐添加菜品", icon: <Plus size={16} />, onSelect: () => onAdd(meal.slot, meal.date) }, { label: "复制整餐到明天", icon: <Copy size={16} />, onSelect: () => onCopy(meal) }, ...(meal.status === "confirmed" ? [{ label: "改回待确认", icon: <RefreshCw size={16} />, onSelect: () => onReset(meal.id) }] : []), { label: "删除整餐", icon: <Trash2 size={16} />, onSelect: () => onDelete(meal.id), danger: true }]} /></div>
+        </article>;
+      })}<button className="empty-meal" onClick={() => onAdd("snack", selectedDate)}><Plus size={20} /><span><strong>从已有菜谱添加加餐</strong><small>预选加餐，可修改时间和参与成员</small></span></button></div>
     </div>
   );
 }
@@ -757,20 +792,50 @@ function MemberChecklist({ members, selectedIds, onChange }: { members: Member[]
   return <fieldset className="member-checklist"><legend>参与成员</legend><div>{members.map((member) => <label key={member.id} className={selectedIds.includes(member.id) ? "selected" : ""}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggle(member.id)} /><span className="avatar">{member.avatar}</span><span><strong>{member.name}</strong><small>{member.relation}</small></span><Check size={16} /></label>)}</div></fieldset>;
 }
 
-function MealPlacementModal({ recipes, members, selectedDate, initialRecipeId, initialSlot, close, addMeal }: { recipes: Recipe[]; members: Member[]; selectedDate: string; initialRecipeId: string | null; initialSlot: MealSlot | null; close: () => void; addMeal: (recipe: Recipe, slot: MealSlot, time: string, participantIds: string[]) => void }) {
+function MealPlacementModal({ recipes, meals, members, selectedDate, initialRecipeId, initialSlot, close, addMeal }: { recipes: Recipe[]; meals: Meal[]; members: Member[]; selectedDate: string; initialRecipeId: string | null; initialSlot: MealSlot | null; close: () => void; addMeal: (recipe: Recipe, slot: MealSlot, time: string, participantIds: string[]) => void }) {
+  const startingSlot = initialSlot ?? "dinner";
+  const startingMeal = meals.find((meal) => meal.date === selectedDate && meal.slot === startingSlot);
   const [recipeId, setRecipeId] = useState(() => recipes.some((recipe) => recipe.id === initialRecipeId) ? initialRecipeId! : recipes[0]?.id ?? "");
-  const [slot, setSlot] = useState<MealSlot>(initialSlot ?? "dinner");
-  const [time, setTime] = useState(defaultMealTimes[initialSlot ?? "dinner"]);
-  const [participantIds, setParticipantIds] = useState(() => members.map((member) => member.id));
+  const [slot, setSlot] = useState<MealSlot>(startingSlot);
+  const [time, setTime] = useState(startingMeal?.time ?? defaultMealTimes[startingSlot]);
+  const [participantIds, setParticipantIds] = useState(() => startingMeal?.participantIds ?? members.map((member) => member.id));
   const [error, setError] = useState("");
   const selectedRecipe = recipes.find((recipe) => recipe.id === recipeId);
+  const existingMeal = meals.find((meal) => meal.date === selectedDate && meal.slot === slot);
   const save = () => {
     if (!selectedRecipe) return setError("请选择一个已有菜谱");
     if (!/^\d{2}:\d{2}$/.test(time)) return setError("请选择用餐时间");
     if (participantIds.length === 0) return setError("请至少选择一位参与成员");
     addMeal(selectedRecipe, slot, time, participantIds);
   };
-  return <AppModal title="从已有菜谱添加到菜单" onClose={close} wide>{recipes.length === 0 ? <div className="empty-state"><Utensils size={28} /><h3>还没有可用菜谱</h3><p>请先到菜谱页创建菜谱，再返回菜单安排餐食。</p><button className="primary-button" onClick={close}>知道了</button></div> : <><div className="meal-placement-date"><CalendarDays size={18} /><span>安排到<strong>{formatMenuDate(selectedDate)}</strong></span></div><div className="meal-recipe-picker" role="radiogroup" aria-label="选择已有菜谱">{recipes.map((recipe) => { const total = calculateRecipe(recipe); return <button key={recipe.id} type="button" role="radio" aria-checked={recipe.id === recipeId} className={recipe.id === recipeId ? "selected" : ""} onClick={() => setRecipeId(recipe.id)}><span className="food-thumb"><Utensils size={21} /></span><span><strong>{recipe.name}</strong><small>{recipe.tags.join(" · ") || `${recipe.ingredients.length} 种食材`}</small></span><em>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)} kcal/份</em><Check size={17} /></button>; })}</div><div className="form-grid meal-arrangement-fields"><label className="field"><span>餐别</span><select value={slot} onChange={(event) => { const next = event.target.value as MealSlot; setSlot(next); setTime(defaultMealTimes[next]); }}><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label><label className="field"><span>用餐时间</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><MemberChecklist members={members} selectedIds={participantIds} onChange={setParticipantIds} />{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Plus size={17} />加入菜单</button></div></>}</AppModal>;
+  if (recipes.length === 0) {
+    return <AppModal title="从已有菜谱添加到菜单" onClose={close} wide><div className="empty-state"><Utensils size={28} /><h3>还没有可用菜谱</h3><p>请先到菜谱页创建菜谱，再返回菜单安排餐食。</p><button className="primary-button" onClick={close}>知道了</button></div></AppModal>;
+  }
+  const changeSlot = (next: MealSlot) => {
+    const nextMeal = meals.find((meal) => meal.date === selectedDate && meal.slot === next);
+    setSlot(next);
+    setTime(nextMeal?.time ?? defaultMealTimes[next]);
+    setParticipantIds(nextMeal?.participantIds ?? members.map((member) => member.id));
+  };
+  return (
+    <AppModal title="从已有菜谱添加到菜单" onClose={close} wide>
+      <div className="meal-placement-date"><CalendarDays size={18} /><span>安排到<strong>{formatMenuDate(selectedDate)}</strong></span></div>
+      <div className="meal-recipe-picker" role="radiogroup" aria-label="选择已有菜谱">
+        {recipes.map((recipe) => {
+          const total = calculateRecipe(recipe);
+          return <button key={recipe.id} type="button" role="radio" aria-checked={recipe.id === recipeId} className={recipe.id === recipeId ? "selected" : ""} onClick={() => setRecipeId(recipe.id)}><span className="food-thumb"><Utensils size={21} /></span><span><strong>{recipe.name}</strong><small>{recipe.tags.join(" · ") || `${recipe.ingredients.length} 种食材`}</small></span><em>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)} kcal/份</em><Check size={17} /></button>;
+        })}
+      </div>
+      <div className="form-grid meal-arrangement-fields">
+        <label className="field"><span>餐别</span><select value={slot} onChange={(event) => changeSlot(event.target.value as MealSlot)}><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label>
+        <label className="field"><span>用餐时间</span><input type="time" value={time} disabled={Boolean(existingMeal)} onChange={(event) => setTime(event.target.value)} /><small>{existingMeal ? "本餐已有菜品，请在菜单栏编辑整餐时间" : "可按家庭作息修改"}</small></label>
+      </div>
+      {existingMeal && <div className="meal-merge-note"><Info size={16} /><p>这一天的{slotMeta[slot].label}已有 {existingMeal.dishes.length} 道菜，新菜品会加入同一个餐次栏；时间沿用本餐设置。</p></div>}
+      <MemberChecklist members={members} selectedIds={participantIds} onChange={setParticipantIds} />
+      {error && <p className="form-error"><CircleAlert size={15} />{error}</p>}
+      <div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Plus size={17} />{existingMeal ? "加入本餐" : "加入菜单"}</button></div>
+    </AppModal>
+  );
 }
 
 function MealEditModal({ meal, members, close, saveMeal }: { meal: Meal; members: Member[]; close: () => void; saveMeal: (meal: Meal) => void }) {
