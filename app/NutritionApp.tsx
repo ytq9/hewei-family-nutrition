@@ -53,6 +53,7 @@ import {
   sumVectors,
 } from "./lib/nutrition";
 import { convertShoppingAmount, generateShoppingFromMeals } from "./lib/shopping";
+import { createGptRecipePrompt, createRecipeFile, createRecipeTemplate, parseRecipeFile } from "./lib/recipe-file";
 import { nutrientKeys } from "./lib/types";
 import type {
   Meal,
@@ -66,7 +67,7 @@ import type {
 } from "./lib/types";
 
 type TabId = "home" | "menu" | "recipes" | "shopping" | "family";
-type ModalId = "data" | "recipe" | "recipeEdit" | "meal" | "mealEdit" | "member" | "memberEdit" | "householdEdit" | "vital" | "install" | null;
+type ModalId = "data" | "recipe" | "recipeImport" | "recipeEdit" | "meal" | "mealEdit" | "member" | "memberEdit" | "householdEdit" | "vital" | "install" | null;
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -134,6 +135,15 @@ const customNutrition = (energy: number | null, protein: number | null = null, f
 
 function round(value: number, digits = 0) {
   return Number(value.toFixed(digits));
+}
+
+function downloadTextFile(filename: string, content: string, type = "application/json") {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function subscribeToConnectivity(onChange: () => void) {
@@ -396,6 +406,12 @@ export default function NutritionApp() {
     notify("菜谱副本已创建");
   };
 
+  const exportRecipe = (recipe: Recipe) => {
+    const safeName = recipe.name.replace(/[\\/:*?"<>|]/g, "-") || "菜谱";
+    downloadTextFile(`${safeName}.hewei-recipe.json`, createRecipeFile(recipe));
+    notify("标准菜谱文件已导出");
+  };
+
   const deleteRecipe = (recipeId: string) => {
     setRecipes((current) => current.filter((recipe) => recipe.id !== recipeId));
     notify("菜谱已删除，历史餐食快照不受影响");
@@ -451,7 +467,7 @@ export default function NutritionApp() {
 
   const renderView = () => {
     if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onRemoveDish={deleteDish} onEdit={(meal) => { setEditingMeal(meal); setModal("mealEdit"); }} onAdd={(slot, date) => { if (date) setSelectedMealDate(date); setPlacingRecipeId(null); setPlacingMealSlot(slot ?? null); setModal("meal"); }} />;
-    if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onEdit={(recipe) => { setEditingRecipe(recipe); setModal("recipeEdit"); }} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={(recipe) => { setPlacingRecipeId(recipe.id); setPlacingMealSlot(null); setActiveTab("menu"); setModal("meal"); }} />;
+    if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onEdit={(recipe) => { setEditingRecipe(recipe); setModal("recipeEdit"); }} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onExport={exportRecipe} onImport={() => setModal("recipeImport")} onAdd={() => setModal("recipe")} onUse={(recipe) => { setPlacingRecipeId(recipe.id); setPlacingMealSlot(null); setActiveTab("menu"); setModal("meal"); }} />;
     if (activeTab === "shopping") return <ShoppingView shopping={shopping} meals={meals} initialDate={selectedMealDate} setShopping={setShopping} notify={notify} />;
     if (activeTab === "family") return <FamilyView householdName={householdName} members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onEditHousehold={() => setModal("householdEdit")} onAddMember={() => setModal("member")} onEditMember={(member) => { setEditingMember(member); setModal("memberEdit"); }} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
     return <HomeView selectedMember={selectedMember} members={members} setSelectedMemberId={setSelectedMemberId} actualNutrition={actualNutrition} plannedNutrition={plannedNutrition} statuses={statuses} meals={meals.filter((meal) => meal.date === todayDateKey)} onConfirm={confirmMeal} onCreateRecipe={() => setModal("recipe")} onNavigate={setActiveTab} />;
@@ -511,6 +527,7 @@ export default function NutritionApp() {
 
       {modal === "data" && <LocalDataModal data={localData} close={() => setModal(null)} notify={notify} onImport={setLocalData} onReset={() => setLocalData(structuredClone(initialLocalData))} />}
       {modal === "recipe" && <RecipeModal close={() => setModal(null)} addRecipe={(recipe) => { setRecipes((current) => [recipe, ...current]); setModal(null); notify("菜谱已保存"); }} />}
+      {modal === "recipeImport" && <RecipeImportModal close={() => setModal(null)} notify={notify} importRecipe={(recipe) => { setRecipes((current) => [recipe, ...current]); setModal(null); notify(`${recipe.name} 已从标准文件导入`); }} />}
       {modal === "recipeEdit" && editingRecipe && <RecipeEditModal recipe={editingRecipe} close={() => { setModal(null); setEditingRecipe(null); }} saveRecipe={(updated) => { setRecipes((current) => current.map((recipe) => recipe.id === updated.id ? updated : recipe)); setModal(null); setEditingRecipe(null); notify("菜谱修改已保存；历史餐食不受影响"); }} />}
       {modal === "meal" && <MealPlacementModal recipes={recipes} meals={meals} members={members} selectedDate={selectedMealDate} initialRecipeId={placingRecipeId} initialSlot={placingMealSlot} close={() => { setModal(null); setPlacingRecipeId(null); setPlacingMealSlot(null); }} addMeal={addRecipeToMenu} />}
       {modal === "mealEdit" && editingMeal && <MealEditModal meal={editingMeal} members={members} close={() => { setModal(null); setEditingMeal(null); }} saveMeal={saveMealDetails} />}
@@ -622,10 +639,32 @@ function MenuView({ meals, members, mode, setMode, selectedDate, todayDate, onSe
   );
 }
 
-function RecipesView({ recipes, search, setSearch, onFavorite, onEdit, onDuplicate, onDelete, onAdd, onUse }: { recipes: Recipe[]; search: string; setSearch: (value: string) => void; onFavorite: (id: string) => void; onEdit: (recipe: Recipe) => void; onDuplicate: (recipe: Recipe) => void; onDelete: (id: string) => void; onAdd: () => void; onUse: (recipe: Recipe) => void }) {
+function RecipesView({ recipes, search, setSearch, onFavorite, onEdit, onDuplicate, onDelete, onExport, onImport, onAdd, onUse }: { recipes: Recipe[]; search: string; setSearch: (value: string) => void; onFavorite: (id: string) => void; onEdit: (recipe: Recipe) => void; onDuplicate: (recipe: Recipe) => void; onDelete: (id: string) => void; onExport: (recipe: Recipe) => void; onImport: () => void; onAdd: () => void; onUse: (recipe: Recipe) => void }) {
   const normalizedSearch = search.trim();
   const filtered = recipes.filter((recipe) => recipe.name.includes(normalizedSearch) || recipe.description.includes(normalizedSearch) || recipe.tags.some((tag) => tag.includes(normalizedSearch)) || recipe.ingredients.some((ingredient) => ingredient.food.name.includes(normalizedSearch)));
-  return <div className="page-stack"><div className="page-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索菜名、食材、备注或标签" /></label><button className="primary-button" onClick={onAdd} aria-label="新建菜谱"><Plus size={18} />新建菜谱</button></div><div className="recipe-grid">{filtered.map((recipe, index) => { const total = calculateRecipe(recipe); return <article className="recipe-card" key={recipe.id}><div className={`recipe-visual visual-${index % 3}`}><span>{recipe.tags[0] ?? "自定义"}</span><Utensils size={36} /><button onClick={() => onFavorite(recipe.id)} className={recipe.favorite ? "favorite" : ""} aria-label={recipe.favorite ? "取消收藏" : "收藏"}><Heart size={19} fill={recipe.favorite ? "currentColor" : "none"} /></button></div><div className="recipe-body"><div className="recipe-title"><div><span className="eyebrow">{recipe.yieldServings} 份 · {recipe.ingredients.length} 种食材</span><h3>{recipe.name}</h3></div><OverflowMenu label={`${recipe.name}更多操作`} actions={[{ label: "编辑菜谱", icon: <Pencil size={16} />, onSelect: () => onEdit(recipe) }, { label: "安排到菜单", icon: <CalendarDays size={16} />, onSelect: () => onUse(recipe) }, { label: "复制菜谱", icon: <Copy size={16} />, onSelect: () => onDuplicate(recipe) }, { label: recipe.favorite ? "取消收藏" : "收藏菜谱", icon: <Heart size={16} />, onSelect: () => onFavorite(recipe.id) }, { label: "删除菜谱", icon: <Trash2 size={16} />, onSelect: () => onDelete(recipe.id), danger: true }]} /></div><p>{recipe.description || "暂无备注"}</p><div className="recipe-stats"><span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}</strong> kcal/份</span><span><strong>{round((total.proteinG ?? 0) / recipe.yieldServings, 1)}</strong>g 蛋白质</span><span>{recipe.tags.join(" · ") || "无标签"}</span></div><div className="recipe-footer"><small>更新于 {recipe.updatedAt}</small><div className="recipe-footer-actions"><button className="edit-recipe" onClick={() => onEdit(recipe)}><Pencil size={15} />编辑</button><button onClick={() => onUse(recipe)}>安排菜单 <Plus size={16} /></button></div></div></div></article>; })}</div>{filtered.length === 0 && <div className="empty-state"><Search size={28} /><h3>没有找到相关菜谱</h3><p>换个关键词，或者新建一份菜谱。</p></div>}</div>;
+  return (
+    <div className="page-stack">
+      <div className="page-toolbar">
+        <label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索菜名、食材、备注或标签" /></label>
+        <div className="page-toolbar-actions"><button className="secondary-button recipe-import-button" onClick={onImport} aria-label="导入标准菜谱 JSON"><Upload size={17} />导入 JSON</button><button className="primary-button" onClick={onAdd} aria-label="新建菜谱"><Plus size={18} />新建菜谱</button></div>
+      </div>
+      <div className="recipe-grid">
+        {filtered.map((recipe, index) => {
+          const total = calculateRecipe(recipe);
+          return <article className="recipe-card" key={recipe.id}>
+            <div className={`recipe-visual visual-${index % 3}`}><span>{recipe.tags[0] ?? "自定义"}</span><Utensils size={36} /><button onClick={() => onFavorite(recipe.id)} className={recipe.favorite ? "favorite" : ""} aria-label={recipe.favorite ? "取消收藏" : "收藏"}><Heart size={19} fill={recipe.favorite ? "currentColor" : "none"} /></button></div>
+            <div className="recipe-body">
+              <div className="recipe-title"><div><span className="eyebrow">{recipe.yieldServings} 份 · {recipe.ingredients.length} 种食材</span><h3>{recipe.name}</h3></div><OverflowMenu label={`${recipe.name}更多操作`} actions={[{ label: "编辑菜谱", icon: <Pencil size={16} />, onSelect: () => onEdit(recipe) }, { label: "安排到菜单", icon: <CalendarDays size={16} />, onSelect: () => onUse(recipe) }, { label: "导出标准 JSON", icon: <Download size={16} />, onSelect: () => onExport(recipe) }, { label: "复制菜谱", icon: <Copy size={16} />, onSelect: () => onDuplicate(recipe) }, { label: recipe.favorite ? "取消收藏" : "收藏菜谱", icon: <Heart size={16} />, onSelect: () => onFavorite(recipe.id) }, { label: "删除菜谱", icon: <Trash2 size={16} />, onSelect: () => onDelete(recipe.id), danger: true }]} /></div>
+              <p>{recipe.description || "暂无备注"}</p>
+              <div className="recipe-stats"><span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}</strong> kcal/份</span><span><strong>{round((total.proteinG ?? 0) / recipe.yieldServings, 1)}</strong>g 蛋白质</span><span>{recipe.tags.join(" · ") || "无标签"}</span></div>
+              <div className="recipe-footer"><small>更新于 {recipe.updatedAt}</small><div className="recipe-footer-actions"><button className="edit-recipe" onClick={() => onEdit(recipe)}><Pencil size={15} />编辑</button><button onClick={() => onUse(recipe)}>安排菜单 <Plus size={16} /></button></div></div>
+            </div>
+          </article>;
+        })}
+      </div>
+      {filtered.length === 0 && <div className="empty-state"><Search size={28} /><h3>没有找到相关菜谱</h3><p>换个关键词，或者新建或导入一份菜谱。</p></div>}
+    </div>
+  );
 }
 
 function ShoppingView({ shopping, meals, initialDate, setShopping, notify }: { shopping: ShoppingItem[]; meals: Meal[]; initialDate: string; setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>>; notify: (message: string) => void }) {
@@ -852,13 +891,57 @@ function MealEditModal({ meal, members, close, saveMeal }: { meal: Meal; members
   return <AppModal title={`编辑餐次 · ${recipeName}`} onClose={close}><div className="meal-placement-date"><CalendarDays size={18} /><span>{formatMenuDate(meal.date)} · <strong>{recipeName}</strong></span></div><div className="form-grid meal-arrangement-fields"><label className="field"><span>餐别</span><select value={slot} onChange={(event) => { const next = event.target.value as MealSlot; setSlot(next); setTime(defaultMealTimes[next]); }}><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label><label className="field"><span>用餐时间</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><MemberChecklist members={members} selectedIds={participantIds} onChange={setParticipantIds} />{meal.status === "confirmed" && <div className="reference-note"><Info size={16} /><p>这是已确认的餐次。保存修改后会改回待确认，避免直接改变实际摄入统计。</p></div>}{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />保存餐次</button></div></AppModal>;
 }
 
+function RecipeImportModal({ close, notify, importRecipe }: { close: () => void; notify: (message: string) => void; importRecipe: (recipe: Recipe) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [jsonText, setJsonText] = useState("");
+  const [error, setError] = useState("");
+  const importRaw = (raw: string) => {
+    try {
+      importRecipe(parseRecipeFile(raw));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法导入这个菜谱文件");
+    }
+  };
+  const importFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 1024 * 1024) return setError("菜谱文件不能超过 1MB");
+    setError("");
+    importRaw(await file.text());
+  };
+  const copyPrompt = async () => {
+    const prompt = createGptRecipePrompt();
+    try {
+      await navigator.clipboard.writeText(prompt);
+      notify("给 GPT 的生成说明已复制");
+    } catch {
+      downloadTextFile("禾味菜谱-GPT生成说明.txt", prompt, "text/plain;charset=utf-8");
+      notify("无法使用剪贴板，已下载生成说明");
+    }
+  };
+  return (
+    <AppModal title="导入标准菜谱 JSON" onClose={close} wide>
+      <div className="recipe-import-intro"><Upload size={22} /><div><strong>让 GPT 按模板生成，再直接导入</strong><p>网页只读取 JSON 数据，不会运行文件中的脚本或代码。单个文件最大 1MB。</p></div></div>
+      <div className="recipe-import-actions">
+        <button className="primary-button" onClick={() => fileRef.current?.click()}><Upload size={17} />选择 JSON 文件并导入</button>
+        <button className="secondary-button" onClick={() => downloadTextFile("禾味菜谱模板.hewei-recipe.json", createRecipeTemplate())}><Download size={17} />下载格式模板</button>
+        <button className="secondary-button" onClick={copyPrompt}><Copy size={17} />复制给 GPT 的说明</button>
+        <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(event) => { void importFile(event.target.files?.[0]); event.target.value = ""; }} />
+      </div>
+      <div className="recipe-import-divider"><span>或者粘贴 JSON</span></div>
+      <label className="field"><span>标准菜谱 JSON</span><textarea className="recipe-json-input" value={jsonText} onChange={(event) => setJsonText(event.target.value)} placeholder={'{\n  "format": "hewei-recipe",\n  "version": 1,\n  "recipe": { ... }\n}'} spellCheck={false} /></label>
+      {error && <p className="form-error"><CircleAlert size={15} />{error}</p>}
+      <div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" disabled={!jsonText.trim()} onClick={() => importRaw(jsonText)}><Check size={17} />导入粘贴内容</button></div>
+    </AppModal>
+  );
+}
+
 function RecipeEditModal({ recipe, close, saveRecipe, mode = "edit" }: { recipe: Recipe; close: () => void; saveRecipe: (recipe: Recipe) => void; mode?: "create" | "edit" }) {
   const [draft, setDraft] = useState<Recipe>(() => structuredClone(recipe));
   const [error, setError] = useState("");
   const updateIngredient = (index: number, update: (ingredient: Recipe["ingredients"][number]) => Recipe["ingredients"][number]) => {
     setDraft((current) => ({ ...current, ingredients: current.ingredients.map((ingredient, ingredientIndex) => ingredientIndex === index ? update(ingredient) : ingredient) }));
   };
-  const updateIngredientNutrient = (index: number, key: "energyKcal" | "proteinG" | "fatG" | "carbohydrateG", value: string) => {
+  const updateIngredientNutrient = (index: number, key: NutrientKey, value: string) => {
     updateIngredient(index, (current) => ({
       ...current,
       food: {
@@ -897,13 +980,44 @@ function RecipeEditModal({ recipe, close, saveRecipe, mode = "edit" }: { recipe:
     if (draft.finishedWeightG !== undefined && (!Number.isFinite(draft.finishedWeightG) || draft.finishedWeightG <= 0)) return setError("成品重量必须大于 0，或者留空");
     if (draft.ingredients.length === 0) return setError("菜谱至少需要一种食材");
     const invalid = draft.ingredients.find((ingredient) => {
-      const nutritionValues = [ingredient.food.nutrientsPer100g.energyKcal, ingredient.food.nutrientsPer100g.proteinG, ingredient.food.nutrientsPer100g.fatG, ingredient.food.nutrientsPer100g.carbohydrateG];
+      const nutritionValues = nutrientKeys.map((key) => ingredient.food.nutrientsPer100g[key]);
       return !ingredient.food.name.trim() || !Number.isFinite(ingredient.amountG) || ingredient.amountG <= 0 || !Number.isFinite(ingredient.edibleRatio) || ingredient.edibleRatio <= 0 || ingredient.edibleRatio > 1 || nutritionValues.some((value) => value !== null && (!Number.isFinite(value) || value < 0));
     });
     if (invalid) return setError("请检查每种食材的名称、重量、可食比例和每 100g 营养");
     saveRecipe({ ...draft, name, description: draft.description.trim(), updatedAt: "刚刚" });
   };
-  return <AppModal title={mode === "create" ? "手工创建菜谱" : `编辑菜谱 · ${recipe.name}`} onClose={close} wide>{mode === "create" && <div className="manual-entry-note"><Utensils size={18} /><div><strong>首次创建即可录入多种食材</strong><p>使用下方“添加食材”，逐项填写名称、重量、状态和每 100g 营养。</p></div></div>}<div className="form-grid recipe-edit-basics"><label className="field span-two"><span>菜名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} autoFocus /></label><label className="field span-two"><span>备注 / 菜谱说明</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={3} placeholder="记录做法、口味、注意事项或适合的场景" /></label><label className="field"><span>出品份数</span><input type="number" min="0.1" step="0.1" value={draft.yieldServings} onChange={(event) => setDraft({ ...draft, yieldServings: Number(event.target.value) })} /></label><label className="field"><span>成品重量（g，可选）</span><input type="number" min="1" value={draft.finishedWeightG ?? ""} onChange={(event) => setDraft({ ...draft, finishedWeightG: event.target.value ? Number(event.target.value) : undefined })} /></label><label className="field span-two"><span>标签（用顿号或逗号分隔）</span><input value={draft.tags.join("、")} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean) })} placeholder="例如：家常、快手、高蛋白" /></label></div><div className="ingredient-editor-heading"><div><span className="eyebrow">食材明细</span><h3>{draft.ingredients.length} 种食材</h3></div><button className="secondary-button" onClick={addIngredient}><Plus size={16} />添加食材</button></div><div className="ingredient-editor-list">{draft.ingredients.map((ingredient, index) => <section className="ingredient-editor" key={ingredient.id}><div className="ingredient-editor-title"><strong>食材 {index + 1}</strong><button onClick={() => setDraft((current) => ({ ...current, ingredients: current.ingredients.filter((_, ingredientIndex) => ingredientIndex !== index) }))} aria-label={`删除${ingredient.food.name || `食材${index + 1}`}`}><Trash2 size={16} /></button></div><div className="ingredient-editor-grid"><label className="field"><span>食材名称</span><input value={ingredient.food.name} placeholder="例如：番茄" onChange={(event) => updateIngredient(index, (current) => ({ ...current, food: { ...current.food, name: event.target.value, source: "custom", sourceId: undefined, sourceVersion: todayDateKey } }))} /></label><label className="field"><span>状态</span><select value={ingredient.food.state} onChange={(event) => updateIngredient(index, (current) => ({ ...current, food: { ...current.food, state: event.target.value as typeof current.food.state, source: "custom", sourceId: undefined, sourceVersion: todayDateKey } }))}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label><label className="field"><span>重量（g）</span><input type="number" min="0.1" step="0.1" value={ingredient.amountG} onChange={(event) => updateIngredient(index, (current) => ({ ...current, amountG: Number(event.target.value) }))} /></label><label className="field"><span>可食比例（%）</span><input type="number" min="1" max="100" value={round(ingredient.edibleRatio * 100, 1)} onChange={(event) => updateIngredient(index, (current) => ({ ...current, edibleRatio: Number(event.target.value) / 100 }))} /></label></div><div className="ingredient-nutrition-heading"><strong>每 100g 营养</strong><span>留空表示数据不完整，不会按 0 计算</span></div><div className="ingredient-nutrition-grid"><label className="field"><span>热量（kcal）</span><input type="number" min="0" step="0.1" value={ingredient.food.nutrientsPer100g.energyKcal ?? ""} onChange={(event) => updateIngredientNutrient(index, "energyKcal", event.target.value)} /></label><label className="field"><span>蛋白质（g）</span><input type="number" min="0" step="0.1" value={ingredient.food.nutrientsPer100g.proteinG ?? ""} onChange={(event) => updateIngredientNutrient(index, "proteinG", event.target.value)} /></label><label className="field"><span>脂肪（g）</span><input type="number" min="0" step="0.1" value={ingredient.food.nutrientsPer100g.fatG ?? ""} onChange={(event) => updateIngredientNutrient(index, "fatG", event.target.value)} /></label><label className="field"><span>碳水化合物（g）</span><input type="number" min="0" step="0.1" value={ingredient.food.nutrientsPer100g.carbohydrateG ?? ""} onChange={(event) => updateIngredientNutrient(index, "carbohydrateG", event.target.value)} /></label></div></section>)}</div>{draft.ingredients.length === 0 && <div className="empty-state"><Apple size={27} /><h3>还没有食材</h3><p>点击“添加食材”开始录入。</p></div>}<div className="reference-note"><Info size={16} /><p>{mode === "create" ? "可以一次添加全部食材，保存后仍可继续编辑。餐别、用餐时间和参与成员请在菜单页设置。" : "餐别、用餐时间和参与成员请在菜单页设置。保存菜谱后会重新计算营养；已经安排或确认的餐食继续使用当时的菜谱快照。"}</p></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />{mode === "create" ? "创建菜谱" : "保存修改"}</button></div></AppModal>;
+  return (
+    <AppModal title={mode === "create" ? "手工创建菜谱" : `编辑菜谱 · ${recipe.name}`} onClose={close} wide>
+      {mode === "create" && <div className="manual-entry-note"><Utensils size={18} /><div><strong>首次创建即可录入多种食材</strong><p>使用下方“添加食材”，逐项填写名称、重量、状态和每 100g 营养。</p></div></div>}
+      <div className="form-grid recipe-edit-basics">
+        <label className="field span-two"><span>菜名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} autoFocus /></label>
+        <label className="field span-two"><span>备注 / 菜谱说明</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={3} placeholder="记录做法、口味、注意事项或适合的场景" /></label>
+        <label className="field"><span>出品份数</span><input type="number" min="0.1" step="0.1" value={draft.yieldServings} onChange={(event) => setDraft({ ...draft, yieldServings: Number(event.target.value) })} /></label>
+        <label className="field"><span>成品重量（g，可选）</span><input type="number" min="1" value={draft.finishedWeightG ?? ""} onChange={(event) => setDraft({ ...draft, finishedWeightG: event.target.value ? Number(event.target.value) : undefined })} /></label>
+        <label className="field span-two"><span>标签（用顿号或逗号分隔）</span><input value={draft.tags.join("、")} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean) })} placeholder="例如：家常、快手、高蛋白" /></label>
+      </div>
+      <div className="ingredient-editor-heading"><div><span className="eyebrow">食材明细</span><h3>{draft.ingredients.length} 种食材</h3></div><button className="secondary-button" onClick={addIngredient}><Plus size={16} />添加食材</button></div>
+      <div className="ingredient-editor-list">
+        {draft.ingredients.map((ingredient, index) => <section className="ingredient-editor" key={ingredient.id}>
+          <div className="ingredient-editor-title"><strong>食材 {index + 1}</strong><button onClick={() => setDraft((current) => ({ ...current, ingredients: current.ingredients.filter((_, ingredientIndex) => ingredientIndex !== index) }))} aria-label={`删除${ingredient.food.name || `食材${index + 1}`}`}><Trash2 size={16} /></button></div>
+          <div className="ingredient-editor-grid">
+            <label className="field"><span>食材名称</span><input value={ingredient.food.name} placeholder="例如：番茄" onChange={(event) => updateIngredient(index, (current) => ({ ...current, food: { ...current.food, name: event.target.value, source: "custom", sourceId: undefined, sourceVersion: todayDateKey } }))} /></label>
+            <label className="field"><span>状态</span><select value={ingredient.food.state} onChange={(event) => updateIngredient(index, (current) => ({ ...current, food: { ...current.food, state: event.target.value as typeof current.food.state, source: "custom", sourceId: undefined, sourceVersion: todayDateKey } }))}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label>
+            <label className="field"><span>重量（g）</span><input type="number" min="0.1" step="0.1" value={ingredient.amountG} onChange={(event) => updateIngredient(index, (current) => ({ ...current, amountG: Number(event.target.value) }))} /></label>
+            <label className="field"><span>可食比例（%）</span><input type="number" min="1" max="100" value={round(ingredient.edibleRatio * 100, 1)} onChange={(event) => updateIngredient(index, (current) => ({ ...current, edibleRatio: Number(event.target.value) / 100 }))} /></label>
+          </div>
+          <div className="ingredient-nutrition-heading"><strong>每 100g 可食部营养</strong><span>留空表示数据不完整，不会按 0 计算</span></div>
+          <div className="ingredient-nutrition-grid">
+            {nutrientKeys.map((key) => <label className="field" key={key}><span>{nutrientMeta[key].label}（{nutrientMeta[key].short}）</span><input type="number" min="0" step="0.1" value={ingredient.food.nutrientsPer100g[key] ?? ""} onChange={(event) => updateIngredientNutrient(index, key, event.target.value)} placeholder="可留空" /></label>)}
+          </div>
+        </section>)}
+      </div>
+      {draft.ingredients.length === 0 && <div className="empty-state"><Apple size={27} /><h3>还没有食材</h3><p>点击“添加食材”开始录入。</p></div>}
+      <div className="reference-note"><Info size={16} /><p>{mode === "create" ? "可以一次添加全部食材，保存后仍可继续编辑。餐别、用餐时间和参与成员请在菜单页设置。" : "餐别、用餐时间和参与成员请在菜单页设置。保存菜谱后会重新计算营养；已经安排或确认的餐食继续使用当时的菜谱快照。"}</p></div>
+      {error && <p className="form-error"><CircleAlert size={15} />{error}</p>}
+      <div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />{mode === "create" ? "创建菜谱" : "保存修改"}</button></div>
+    </AppModal>
+  );
 }
 
 function RecipeModal({ close, addRecipe }: { close: () => void; addRecipe: (recipe: Recipe) => void }) {
