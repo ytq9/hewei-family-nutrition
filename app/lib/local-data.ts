@@ -46,7 +46,7 @@ const recipeDataSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
-  category: z.enum(["breakfast", "lunch", "dinner", "snack"]),
+  category: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(),
   favorite: z.boolean(),
   image: z.string().optional(),
   yieldServings: z.number().positive(),

@@ -10,11 +10,11 @@ import {
 } from "../app/lib/nutrition.ts";
 import type { FoodItem, NutrientVector, Recipe } from "../app/lib/types.ts";
 
-const nutrients = (energy: number | null, protein: number | null): NutrientVector => ({
+const nutrients = (energy: number | null, protein: number | null, fat = 0, carbohydrate = 0): NutrientVector => ({
   energyKcal: energy,
   proteinG: protein,
-  fatG: 0,
-  carbohydrateG: 0,
+  fatG: fat,
+  carbohydrateG: carbohydrate,
   fiberG: 0,
   sodiumMg: 0,
   calciumMg: 0,
@@ -38,7 +38,6 @@ const recipe: Recipe = {
   id: "test-recipe",
   name: "测试菜谱",
   description: "",
-  category: "lunch",
   favorite: false,
   yieldServings: 2,
   finishedWeightG: 300,
@@ -51,6 +50,16 @@ test("calculates edible weight instead of treating gross weight as consumed", ()
   const result = calculateIngredient(recipe.ingredients[0]);
   assert.equal(result.energyKcal, 300);
   assert.equal(result.proteinG, 15);
+});
+
+test("recalculates energy and all three macronutrients after recipe editing", () => {
+  const editedRecipe = structuredClone(recipe);
+  editedRecipe.ingredients[0].food.nutrientsPer100g = nutrients(220, 14, 8, 16);
+  const result = calculateRecipe(editedRecipe);
+  assert.equal(result.energyKcal, 330);
+  assert.equal(result.proteinG, 21);
+  assert.equal(result.fatG, 12);
+  assert.equal(result.carbohydrateG, 24);
 });
 
 test("allocates recipe by servings and by finished grams", () => {

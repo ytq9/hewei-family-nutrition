@@ -19,6 +19,7 @@ export type NutrientVector = Record<NutrientKey, number | null>;
 export type FoodState = "raw" | "cooked" | "packaged";
 export type MealStatus = "planned" | "confirmed";
 export type AllocationMode = "servings" | "grams";
+export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 
 export type FoodItem = {
   id: string;
@@ -43,7 +44,8 @@ export type Recipe = {
   id: string;
   name: string;
   description: string;
-  category: "breakfast" | "lunch" | "dinner" | "snack";
+  /** @deprecated 餐别由菜单中的 Meal.slot 决定；仅保留用于兼容旧的本机备份。 */
+  category?: MealSlot;
   favorite: boolean;
   image?: string;
   yieldServings: number;
@@ -80,7 +82,7 @@ export type MealDish = {
 export type Meal = {
   id: string;
   date: string;
-  slot: "breakfast" | "lunch" | "dinner" | "snack";
+  slot: MealSlot;
   status: MealStatus;
   time: string;
   participantIds: string[];
