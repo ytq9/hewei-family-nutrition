@@ -2,7 +2,7 @@
 
 type OtpVerifier = (input: { token: string }) => Promise<unknown>;
 type CloudBaseAuth = {
-  signInWithOtp: (input: { email: string; options: { shouldCreateUser: boolean } }) => Promise<{
+  signInWithOtp: (input: { email: string }) => Promise<{
     data?: { verifyOtp?: OtpVerifier };
     error?: { message?: string };
   }>;
@@ -33,10 +33,7 @@ async function getApp() {
 export async function sendEmailOtp(email: string) {
   const app = await getApp();
   const auth = app.auth();
-  const { data, error } = await auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: true },
-  });
+  const { data, error } = await auth.signInWithOtp({ email });
   if (error) throw new Error(error.message ?? "验证码发送失败");
   if (!data?.verifyOtp) throw new Error("CloudBase 未返回验证码校验器");
   otpVerifier = data.verifyOtp;
@@ -74,6 +71,20 @@ export async function analyzeIngredientPhoto(fileIds: string[]) {
   const result = response.result as { ok?: boolean; error?: string; data?: unknown } | undefined;
   if (response?.code || result?.ok === false) throw new Error(response?.message ?? result?.error ?? "识别失败");
   return result?.data as {
-    candidates: Array<{ name: string; confidence: number; visibleWeightG: number | null }>;
+    photoType: "ingredients" | "nutrition_label" | "mixed" | "unknown";
+    candidates: Array<{
+      name: string;
+      confidence: number;
+      state: "raw" | "cooked" | "packaged";
+      visibleWeightG: number | null;
+    }>;
+    labelNutritionPer100g: {
+      energyKcal: number | null;
+      proteinG: number | null;
+      fatG: number | null;
+      carbohydrateG: number | null;
+      sodiumMg: number | null;
+    } | null;
+    warnings: string[];
   };
 }

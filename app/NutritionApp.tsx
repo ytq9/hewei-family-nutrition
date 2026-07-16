@@ -36,7 +36,13 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
 import { emailSchema, memberSchema, otpSchema, recipeSchema } from "./lib/app-schemas";
-import { cloudbaseConfigured, sendEmailOtp, verifyEmailOtp } from "./lib/cloudbase-client";
+import {
+  analyzeIngredientPhoto,
+  cloudbaseConfigured,
+  sendEmailOtp,
+  uploadIngredientPhoto,
+  verifyEmailOtp,
+} from "./lib/cloudbase-client";
 import {
   driTargets,
   initialMeals,
@@ -129,6 +135,31 @@ function subscribeToConnectivity(onChange: () => void) {
 
 const getOnlineSnapshot = () => navigator.onLine;
 const getServerOnlineSnapshot = () => true;
+
+async function compressPhoto(file: File) {
+  if (!/image\/(jpeg|png)/.test(file.type)) throw new Error("仅支持 JPEG 或 PNG 图片");
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new window.Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("图片无法读取"));
+      element.src = sourceUrl;
+    });
+    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("图片压缩失败")), "image/jpeg", 0.86),
+    );
+    if (blob.size > 5 * 1024 * 1024) throw new Error("压缩后图片仍超过 5MB，请换一张照片");
+    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
 
 function AppModal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   return (
@@ -414,10 +445,41 @@ function LoginModal({ close, notify }: { close: () => void; notify: (message: st
 }
 
 function RecipeModal({ close, addRecipe }: { close: () => void; addRecipe: (recipe: Recipe) => void }) {
-  const [images, setImages] = useState<string[]>([]); const [analyzing, setAnalyzing] = useState(false); const [suggested, setSuggested] = useState(false); const [error, setError] = useState(""); const [form, setForm] = useState({ name: "", ingredientName: "", amountG: "", yieldServings: "3", energy: "" }); const fileRef = useRef<HTMLInputElement>(null);
-  const filesChanged = (files: FileList | null) => { if (!files) return; const selected = Array.from(files).slice(0, 3); if (selected.some((file) => file.size > 5 * 1024 * 1024)) return setError("单张图片不能超过 5MB"); setImages(selected.map((file) => URL.createObjectURL(file))); setAnalyzing(true); setError(""); window.setTimeout(() => { setAnalyzing(false); setSuggested(true); setForm({ name: "清炒时蔬", ingredientName: "西兰花", amountG: "320", yieldServings: "3", energy: "34" }); }, 1000); };
-  const save = () => { const parsed = recipeSchema.safeParse(form); const energyParsed = z.coerce.number().nonnegative().safeParse(form.energy); if (!parsed.success) return setError(parsed.error.issues[0].message); if (!energyParsed.success) return setError("请输入每 100g 热量"); const now = new Date(); addRecipe({ id: `recipe-${now.getTime()}`, name: parsed.data.name, description: "来自食材照片，可继续补充做法和营养标签。", category: "dinner", favorite: false, yieldServings: parsed.data.yieldServings, finishedWeightG: parsed.data.amountG, tags: ["自定义"], updatedAt: "刚刚", image: images[0], ingredients: [{ id: `ingredient-${now.getTime()}`, amountG: parsed.data.amountG, edibleRatio: 1, food: { id: `food-${now.getTime()}`, name: parsed.data.ingredientName, aliases: [], state: "raw", source: "custom", sourceVersion: now.toISOString().slice(0, 10), nutrientsPer100g: customNutrition(energyParsed.data) } }] }); };
-  return <AppModal title="拍照或手工创建菜谱" onClose={close} wide><div className="photo-uploader" onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" accept="image/jpeg,image/png" capture="environment" multiple hidden onChange={(event) => filesChanged(event.target.files)} />{images.length ? <div className="preview-grid">{images.map((image) => <img src={image} alt="待识别食材" key={image} width={240} height={174} />)}{images.length < 3 && <span><Plus size={22} />再加一张</span>}</div> : <><span className="camera-ring"><Camera size={28} /></span><strong>拍下食材或包装营养标签</strong><small>支持 JPEG / PNG，最多 3 张，单张不超过 5MB</small><button type="button"><Upload size={17} />选择照片</button></>}{analyzing && <div className="analysis-overlay"><Sparkles size={22} />AI 正在识别候选信息…</div>}</div>{suggested && <div className="ai-result"><Sparkles size={18} /><div><strong>已识别：西兰花</strong><p>置信度 92% · 图片未发现可靠重量，请确认称重信息。</p></div><span>待确认</span></div>}<div className="form-grid"><label className="field"><span>菜名</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：番茄炒蛋" /></label><label className="field"><span>主要食材</span><input value={form.ingredientName} onChange={(event) => setForm({ ...form, ingredientName: event.target.value })} placeholder="例如：番茄" /></label><label className="field"><span>食材重量（g）</span><input type="number" value={form.amountG} onChange={(event) => setForm({ ...form, amountG: event.target.value })} placeholder="必须由你确认" /></label><label className="field"><span>出品份数</span><input type="number" value={form.yieldServings} onChange={(event) => setForm({ ...form, yieldServings: event.target.value })} /></label><label className="field"><span>每 100g 热量（kcal）</span><input type="number" value={form.energy} onChange={(event) => setForm({ ...form, energy: event.target.value })} placeholder="来自标签或食材库" /></label><label className="field"><span>食材状态</span><select defaultValue="raw"><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />确认并保存</button></div></AppModal>;
+  const [images, setImages] = useState<string[]>([]); const [analyzing, setAnalyzing] = useState(false); const [suggested, setSuggested] = useState(false); const [error, setError] = useState(""); const [form, setForm] = useState({ name: "", ingredientName: "", amountG: "", yieldServings: "3", energy: "", state: "raw" as "raw" | "cooked" | "packaged" }); const fileRef = useRef<HTMLInputElement>(null);
+  const filesChanged = async (files: FileList | null) => {
+    if (!files) return;
+    setAnalyzing(true);
+    setSuggested(false);
+    setError("");
+    try {
+      const selected = await Promise.all(Array.from(files).slice(0, 3).map(compressPhoto));
+      setImages(selected.map((file) => URL.createObjectURL(file)));
+      if (cloudbaseConfigured) {
+        const fileIds = await Promise.all(selected.map(uploadIngredientPhoto));
+        const result = await analyzeIngredientPhoto(fileIds);
+        const candidate = result.candidates[0];
+        if (!candidate) throw new Error("没有识别到可靠食材，请手工录入");
+        setForm((current) => ({
+          ...current,
+          name: candidate.name,
+          ingredientName: candidate.name,
+          amountG: candidate.visibleWeightG?.toString() ?? "",
+          energy: result.labelNutritionPer100g?.energyKcal?.toString() ?? "",
+          state: candidate.state,
+        }));
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        setForm({ name: "清炒时蔬", ingredientName: "西兰花", amountG: "", yieldServings: "3", energy: "34", state: "raw" });
+      }
+      setSuggested(true);
+    } catch (reason) {
+      setError(`${reason instanceof Error ? reason.message : "图片识别失败"}；你仍可直接手工填写。`);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+  const save = () => { const parsed = recipeSchema.safeParse(form); const energyParsed = z.coerce.number().nonnegative().safeParse(form.energy); if (!parsed.success) return setError(parsed.error.issues[0].message); if (!energyParsed.success) return setError("请输入每 100g 热量"); const now = new Date(); addRecipe({ id: `recipe-${now.getTime()}`, name: parsed.data.name, description: "来自食材照片，可继续补充做法和营养标签。", category: "dinner", favorite: false, yieldServings: parsed.data.yieldServings, finishedWeightG: parsed.data.amountG, tags: ["自定义"], updatedAt: "刚刚", image: images[0], ingredients: [{ id: `ingredient-${now.getTime()}`, amountG: parsed.data.amountG, edibleRatio: 1, food: { id: `food-${now.getTime()}`, name: parsed.data.ingredientName, aliases: [], state: form.state, source: "custom", sourceVersion: now.toISOString().slice(0, 10), nutrientsPer100g: customNutrition(energyParsed.data) } }] }); };
+  return <AppModal title="拍照或手工创建菜谱" onClose={close} wide><div className="photo-uploader" onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" accept="image/jpeg,image/png" capture="environment" multiple hidden onChange={(event) => filesChanged(event.target.files)} />{images.length ? <div className="preview-grid">{images.map((image) => <img src={image} alt="待识别食材" key={image} width={240} height={174} />)}{images.length < 3 && <span><Plus size={22} />再加一张</span>}</div> : <><span className="camera-ring"><Camera size={28} /></span><strong>拍下食材或包装营养标签</strong><small>支持 JPEG / PNG，最多 3 张，自动压缩至最长边 1600px</small><button type="button"><Upload size={17} />选择照片</button></>}{analyzing && <div className="analysis-overlay"><Sparkles size={22} />AI 正在识别候选信息…</div>}</div>{suggested && <div className="ai-result"><Sparkles size={18} /><div><strong>候选：{form.ingredientName}</strong><p>{form.amountG ? `识别到可见重量 ${form.amountG}g` : "图片没有可靠重量，请确认称重信息。"}</p></div><span>待确认</span></div>}<div className="form-grid"><label className="field"><span>菜名</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：番茄炒蛋" /></label><label className="field"><span>主要食材</span><input value={form.ingredientName} onChange={(event) => setForm({ ...form, ingredientName: event.target.value })} placeholder="例如：番茄" /></label><label className="field"><span>食材重量（g）</span><input type="number" value={form.amountG} onChange={(event) => setForm({ ...form, amountG: event.target.value })} placeholder="必须由你确认" /></label><label className="field"><span>出品份数</span><input type="number" value={form.yieldServings} onChange={(event) => setForm({ ...form, yieldServings: event.target.value })} /></label><label className="field"><span>每 100g 热量（kcal）</span><input type="number" value={form.energy} onChange={(event) => setForm({ ...form, energy: event.target.value })} placeholder="来自标签或食材库" /></label><label className="field"><span>食材状态</span><select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value as typeof form.state })}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />确认并保存</button></div></AppModal>;
 }
 
 function MemberModal({ close, addMember }: { close: () => void; addMember: (member: Member) => void }) {
