@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CircleAlert,
   ClipboardList,
+  Copy,
   Clock3,
   Download,
   Heart,
@@ -204,6 +205,62 @@ function Avatar({ member, active = false, onClick }: { member: Member; active?: 
   );
 }
 
+function OverflowMenu({ label, actions }: {
+  label: string;
+  actions: Array<{ label: string; icon: React.ReactNode; onSelect: () => void; danger?: boolean }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="overflow-menu" ref={rootRef}>
+      <button
+        className="icon-button overflow-trigger"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(event) => { event.stopPropagation(); setOpen((current) => !current); }}
+      >
+        <MoreHorizontal size={18} />
+      </button>
+      {open && (
+        <div className="overflow-popover" role="menu" aria-label={label}>
+          {actions.map((action) => (
+            <button
+              key={action.label}
+              role="menuitem"
+              className={action.danger ? "danger" : ""}
+              onClick={(event) => {
+                event.stopPropagation();
+                setOpen(false);
+                action.onSelect();
+              }}
+            >
+              {action.icon}<span>{action.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function NutritionApp() {
   const [activeTab, setActiveTab] = useState<TabId>("home");
   const [members, setMembers] = useState(initialMembers);
@@ -274,6 +331,48 @@ export default function NutritionApp() {
     notify("已复制到明天");
   };
 
+  const resetMeal = (mealId: string) => {
+    setMeals((current) => current.map((meal) => meal.id === mealId ? { ...meal, status: "planned" } : meal));
+    notify("已改回待确认，不再计入实际摄入");
+  };
+
+  const deleteMeal = (mealId: string) => {
+    setMeals((current) => current.filter((meal) => meal.id !== mealId));
+    notify("餐次已删除");
+  };
+
+  const duplicateRecipe = (recipe: Recipe) => {
+    const copy: Recipe = { ...structuredClone(recipe), id: `${recipe.id}-copy-${Date.now()}`, name: `${recipe.name}（副本）`, favorite: false, updatedAt: "刚刚" };
+    setRecipes((current) => [copy, ...current]);
+    notify("菜谱副本已创建");
+  };
+
+  const deleteRecipe = (recipeId: string) => {
+    setRecipes((current) => current.filter((recipe) => recipe.id !== recipeId));
+    notify("菜谱已删除，历史餐食快照不受影响");
+  };
+
+  const addRecipeToMenu = (recipe: Recipe) => {
+    const newMeal: Meal = {
+      id: `meal-${Date.now()}`,
+      date: meals[0]?.date ?? "2026-07-16",
+      slot: "dinner",
+      status: "planned",
+      time: "18:40",
+      participantIds: members.map((member) => member.id),
+      dishes: [{
+        id: `dish-${Date.now()}`,
+        recipeId: recipe.id,
+        recipeSnapshot: structuredClone(recipe),
+        allocationMode: "servings",
+        allocations: Object.fromEntries(members.map((member) => [member.id, 1])),
+      }],
+    };
+    setMeals((current) => [...current, newMeal]);
+    setActiveTab("menu");
+    notify(`${recipe.name} 已加入今晚菜单`);
+  };
+
   const handleInstall = async () => {
     if (installPrompt) {
       await installPrompt.prompt();
@@ -286,8 +385,8 @@ export default function NutritionApp() {
   };
 
   const renderView = () => {
-    if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} onConfirm={confirmMeal} onCopy={copyMeal} onAdd={() => setModal("recipe")} />;
-    if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onAdd={() => setModal("recipe")} onUse={(recipe) => { setActiveTab("menu"); notify(`${recipe.name} 已加入今晚菜单`); }} />;
+    if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onAdd={() => setModal("recipe")} />;
+    if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={addRecipeToMenu} />;
     if (activeTab === "shopping") return <ShoppingView shopping={shopping} setShopping={setShopping} notify={notify} />;
     if (activeTab === "family") return <FamilyView members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onAddMember={() => setModal("member")} onAddVital={() => setModal("vital")} notify={notify} />;
     return <HomeView selectedMember={selectedMember} members={members} setSelectedMemberId={setSelectedMemberId} actualNutrition={actualNutrition} plannedNutrition={plannedNutrition} statuses={statuses} meals={meals} onConfirm={confirmMeal} onScan={() => setModal("recipe")} onNavigate={setActiveTab} />;
@@ -405,7 +504,7 @@ function HomeView({ selectedMember, members, setSelectedMemberId, actualNutritio
   );
 }
 
-function MenuView({ meals, members, mode, setMode, onConfirm, onCopy, onAdd }: { meals: Meal[]; members: Member[]; mode: "today" | "week"; setMode: (mode: "today" | "week") => void; onConfirm: (id: string) => void; onCopy: (meal: Meal) => void; onAdd: () => void }) {
+function MenuView({ meals, members, mode, setMode, onConfirm, onCopy, onReset, onDelete, onAdd }: { meals: Meal[]; members: Member[]; mode: "today" | "week"; setMode: (mode: "today" | "week") => void; onConfirm: (id: string) => void; onCopy: (meal: Meal) => void; onReset: (id: string) => void; onDelete: (id: string) => void; onAdd: () => void }) {
   return (
     <div className="page-stack">
       <div className="page-toolbar"><div className="segmented"><button className={mode === "today" ? "active" : ""} onClick={() => setMode("today")}>今日餐单</button><button className={mode === "week" ? "active" : ""} onClick={() => setMode("week")}>本周计划</button></div><button className="primary-button" onClick={onAdd}><Plus size={18} />添加菜品</button></div>
@@ -413,15 +512,15 @@ function MenuView({ meals, members, mode, setMode, onConfirm, onCopy, onAdd }: {
       <div className={mode === "week" ? "week-plan" : "meal-plan"}>{meals.map((meal) => {
         const meta = slotMeta[meal.slot];
         const recipe = meal.dishes[0]?.recipeSnapshot;
-        return <article className="plan-card" key={meal.id}><div className="plan-time"><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div><strong>{meta.label}</strong><small><Clock3 size={14} />{meal.time}</small></div></div><div className="plan-food"><div className="food-thumb"><Apple size={26} /></div><div><span className="eyebrow">{recipe?.tags.join(" · ")}</span><h3>{recipe?.name}</h3><p>{recipe?.ingredients.map((ingredient) => ingredient.food.name).join("、")}</p><div className="participant-stack">{meal.participantIds.map((id) => { const member = members.find((item) => item.id === id); return member ? <span key={id} title={member.name}>{member.avatar}</span> : null; })}<small>{meal.participantIds.length} 人参与</small></div></div></div><div className="plan-nutrition"><span>预计每份</span><strong>{Math.round(((recipe && calculateRecipe(recipe).energyKcal) || 0) / (recipe?.yieldServings || 1))}<small> kcal</small></strong><span>蛋白质 {round(((recipe && calculateRecipe(recipe).proteinG) || 0) / (recipe?.yieldServings || 1), 1)}g</span></div><div className="plan-actions">{meal.status === "planned" ? <button className="primary-button" onClick={() => onConfirm(meal.id)}>确认实吃</button> : <span className="status confirmed"><Check size={14} />已确认</span>}<button className="icon-button" onClick={() => onCopy(meal)} title="复制到明天"><ClipboardList size={18} /></button><button className="icon-button"><MoreHorizontal size={18} /></button></div></article>;
+        return <article className="plan-card" key={meal.id}><div className="plan-time"><span className={`meal-icon ${meta.color}`}>{meta.icon}</span><div><strong>{meta.label}</strong><small><Clock3 size={14} />{meal.time}</small></div></div><div className="plan-food"><div className="food-thumb"><Apple size={26} /></div><div><span className="eyebrow">{recipe?.tags.join(" · ")}</span><h3>{recipe?.name}</h3><p>{recipe?.ingredients.map((ingredient) => ingredient.food.name).join("、")}</p><div className="participant-stack">{meal.participantIds.map((id) => { const member = members.find((item) => item.id === id); return member ? <span key={id} title={member.name}>{member.avatar}</span> : null; })}<small>{meal.participantIds.length} 人参与</small></div></div></div><div className="plan-nutrition"><span>预计每份</span><strong>{Math.round(((recipe && calculateRecipe(recipe).energyKcal) || 0) / (recipe?.yieldServings || 1))}<small> kcal</small></strong><span>蛋白质 {round(((recipe && calculateRecipe(recipe).proteinG) || 0) / (recipe?.yieldServings || 1), 1)}g</span></div><div className="plan-actions">{meal.status === "planned" ? <button className="primary-button" onClick={() => onConfirm(meal.id)}>确认实吃</button> : <span className="status confirmed"><Check size={14} />已确认</span>}<button className="icon-button quick-copy" onClick={() => onCopy(meal)} title="复制到明天" aria-label={`复制${meta.label}到明天`}><ClipboardList size={18} /></button><OverflowMenu label={`${meta.label}更多操作`} actions={[{ label: "复制到明天", icon: <Copy size={16} />, onSelect: () => onCopy(meal) }, ...(meal.status === "confirmed" ? [{ label: "改回待确认", icon: <RefreshCw size={16} />, onSelect: () => onReset(meal.id) }] : []), { label: "删除此餐", icon: <Trash2 size={16} />, onSelect: () => onDelete(meal.id), danger: true }]} /></div></article>;
       })}<button className="empty-meal" onClick={onAdd}><Plus size={20} /><span><strong>添加加餐</strong><small>水果、奶类或坚果</small></span></button></div>
     </div>
   );
 }
 
-function RecipesView({ recipes, search, setSearch, onFavorite, onAdd, onUse }: { recipes: Recipe[]; search: string; setSearch: (value: string) => void; onFavorite: (id: string) => void; onAdd: () => void; onUse: (recipe: Recipe) => void }) {
+function RecipesView({ recipes, search, setSearch, onFavorite, onDuplicate, onDelete, onAdd, onUse }: { recipes: Recipe[]; search: string; setSearch: (value: string) => void; onFavorite: (id: string) => void; onDuplicate: (recipe: Recipe) => void; onDelete: (id: string) => void; onAdd: () => void; onUse: (recipe: Recipe) => void }) {
   const filtered = recipes.filter((recipe) => recipe.name.includes(search) || recipe.ingredients.some((ingredient) => ingredient.food.name.includes(search)));
-  return <div className="page-stack"><div className="page-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索菜名或食材" /></label><button className="primary-button" onClick={onAdd}><Camera size={18} />拍照建菜谱</button></div><div className="recipe-grid">{filtered.map((recipe, index) => { const total = calculateRecipe(recipe); return <article className="recipe-card" key={recipe.id}><div className={`recipe-visual visual-${index % 3}`}><span>{recipe.tags[0]}</span><Utensils size={36} /><button onClick={() => onFavorite(recipe.id)} className={recipe.favorite ? "favorite" : ""} aria-label={recipe.favorite ? "取消收藏" : "收藏"}><Heart size={19} fill={recipe.favorite ? "currentColor" : "none"} /></button></div><div className="recipe-body"><div className="recipe-title"><div><span className="eyebrow">{recipe.category === "lunch" ? "午餐" : "晚餐"} · {recipe.yieldServings} 份</span><h3>{recipe.name}</h3></div><button className="icon-button"><MoreHorizontal size={18} /></button></div><p>{recipe.description}</p><div className="recipe-stats"><span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}</strong> kcal/份</span><span><strong>{round((total.proteinG ?? 0) / recipe.yieldServings, 1)}</strong>g 蛋白质</span><span>{recipe.ingredients.length} 种食材</span></div><div className="recipe-footer"><small>更新于 {recipe.updatedAt}</small><button onClick={() => onUse(recipe)}>加入菜单 <Plus size={16} /></button></div></div></article>; })}</div>{filtered.length === 0 && <div className="empty-state"><Search size={28} /><h3>没有找到相关菜谱</h3><p>换个关键词，或者拍照创建新菜谱。</p></div>}</div>;
+  return <div className="page-stack"><div className="page-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索菜名或食材" /></label><button className="primary-button" onClick={onAdd}><Camera size={18} />拍照建菜谱</button></div><div className="recipe-grid">{filtered.map((recipe, index) => { const total = calculateRecipe(recipe); return <article className="recipe-card" key={recipe.id}><div className={`recipe-visual visual-${index % 3}`}><span>{recipe.tags[0]}</span><Utensils size={36} /><button onClick={() => onFavorite(recipe.id)} className={recipe.favorite ? "favorite" : ""} aria-label={recipe.favorite ? "取消收藏" : "收藏"}><Heart size={19} fill={recipe.favorite ? "currentColor" : "none"} /></button></div><div className="recipe-body"><div className="recipe-title"><div><span className="eyebrow">{recipe.category === "lunch" ? "午餐" : "晚餐"} · {recipe.yieldServings} 份</span><h3>{recipe.name}</h3></div><OverflowMenu label={`${recipe.name}更多操作`} actions={[{ label: "加入今日菜单", icon: <CalendarDays size={16} />, onSelect: () => onUse(recipe) }, { label: "复制菜谱", icon: <Copy size={16} />, onSelect: () => onDuplicate(recipe) }, { label: recipe.favorite ? "取消收藏" : "收藏菜谱", icon: <Heart size={16} />, onSelect: () => onFavorite(recipe.id) }, { label: "删除菜谱", icon: <Trash2 size={16} />, onSelect: () => onDelete(recipe.id), danger: true }]} /></div><p>{recipe.description}</p><div className="recipe-stats"><span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}</strong> kcal/份</span><span><strong>{round((total.proteinG ?? 0) / recipe.yieldServings, 1)}</strong>g 蛋白质</span><span>{recipe.ingredients.length} 种食材</span></div><div className="recipe-footer"><small>更新于 {recipe.updatedAt}</small><button onClick={() => onUse(recipe)}>加入菜单 <Plus size={16} /></button></div></div></article>; })}</div>{filtered.length === 0 && <div className="empty-state"><Search size={28} /><h3>没有找到相关菜谱</h3><p>换个关键词，或者拍照创建新菜谱。</p></div>}</div>;
 }
 
 function ShoppingView({ shopping, setShopping, notify }: { shopping: ShoppingItem[]; setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>>; notify: (message: string) => void }) {
