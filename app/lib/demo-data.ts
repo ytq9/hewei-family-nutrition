@@ -1,4 +1,5 @@
 import type { FoodItem, Meal, Member, NutrientVector, Recipe, ShoppingItem, VitalRecord } from "./types";
+import { dateToKey } from "./date";
 
 const nutrient = (values: Partial<NutrientVector>): NutrientVector => ({
   energyKcal: null,
@@ -59,7 +60,7 @@ export const initialMembers: Member[] = [
   { id: "m3", name: "小满", relation: "女儿 · 8岁", avatar: "满", managed: true, healthShared: true, birthday: "2018-05-21", driSex: "female", heightCm: 128, weightKg: 25.4, activity: "high", goal: "maintain", allergies: ["虾"] },
 ];
 
-const today = new Date().toISOString().slice(0, 10);
+const today = dateToKey(new Date());
 export const initialMeals: Meal[] = [
   { id: "meal-breakfast", date: today, slot: "breakfast", status: "confirmed", time: "07:30", participantIds: ["m1", "m2", "m3"], dishes: [{ id: "dish-breakfast", recipeId: "tomato-egg", recipeSnapshot: initialRecipes[1], allocationMode: "servings", allocations: { m1: 0.8, m2: 1.2, m3: 0.7 } }] },
   { id: "meal-lunch", date: today, slot: "lunch", status: "planned", time: "12:10", participantIds: ["m1", "m2", "m3"], dishes: [{ id: "dish-lunch", recipeId: "salmon-bowl", recipeSnapshot: initialRecipes[0], allocationMode: "servings", allocations: { m1: 1, m2: 1, m3: 1 } }] },
@@ -95,8 +96,3 @@ export const driTargets = {
   vitaminCMg: 100,
   vitaminDUg: 10,
 } satisfies Record<keyof NutrientVector, number>;
-
-export const weekDays = [
-  { day: "一", date: "13" }, { day: "二", date: "14" }, { day: "三", date: "15" },
-  { day: "四", date: "16", current: true }, { day: "五", date: "17" }, { day: "六", date: "18" }, { day: "日", date: "19" },
-];
