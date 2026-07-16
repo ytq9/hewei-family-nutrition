@@ -1,6 +1,6 @@
 # 禾味日历
 
-面向家庭的响应式菜单、食材与营养记录 PWA。手机端支持拍照录入和底部导航，电脑端提供宽屏菜单与健康档案界面。
+面向家庭的响应式菜单、食材与营养记录 PWA。手机端支持拍照参考录入和底部导航，电脑端提供宽屏菜单与健康档案界面。
 
 ## 当前能力
 
@@ -8,13 +8,15 @@
 - 菜谱、食材重量、可食比例和出品份数
 - 按份或按成品克数分配个人摄入
 - 能量及 10 项核心营养素计算，缺失数据不会按零处理
-- 家庭成员、代管档案、健康共享和体征趋势
-- 拍照录入、AI 候选确认流程和手工回退
+- 家庭成员、代管档案和体征趋势
+- 手机拍照或相册预览、手工确认食材信息
 - 菜谱生成购物清单、单位换算和购买勾选
-- CloudBase Auth v2、文档数据库、云函数与私有存储适配
-- PWA manifest、静态资源缓存和主屏幕安装提示（健康记录与家庭数据不写入浏览器缓存）
+- 本机自动保存、JSON 备份导出与导入
+- PWA 主屏幕安装和静态资源缓存
 
-未配置 CloudBase 时，应用自动使用不落盘的体验数据；刷新页面后恢复初始状态。
+这是完全静态的本机版，不需要 CloudBase、数据库、账号或 API Key。菜单和健康数据保存在当前浏览器的 `localStorage` 中，不会上传服务器。清理浏览器数据或更换设备前，应先从“本机数据”导出备份。
+
+静态网页不能安全地直接调用混元视觉：如果把腾讯云密钥写进网页，任何访问者都能读取。因此本版本保留拍照预览和手工录入，不提供云端 AI 识别。
 
 ## 本地运行
 
@@ -22,28 +24,31 @@
 
 ```bash
 npm install
-npm run dev:cloudbase
+npm run dev:static
 ```
+
+生成可部署的纯静态文件：
+
+```bash
+npm run build:static
+```
+
+构建结果位于 `static-dist`，可上传到任意静态网站托管服务。
 
 验证：
 
 ```bash
 npm test
 npm run lint
-npm run build:cloudbase
 ```
 
-## CloudBase 配置
+## 本机数据说明
 
-复制 `.env.example` 为 `.env.local`，只填写网页端可公开配置：
-
-```dotenv
-NEXT_PUBLIC_CLOUDBASE_ENV_ID=你的环境ID
-NEXT_PUBLIC_CLOUDBASE_PUBLISHABLE_KEY=你的PublishableKey
-NEXT_PUBLIC_SITE_URL=https://你的CloudBase默认域名
-```
-
-随后执行 `npm run build:cloudbase`，把 `cloudbase-dist` 目录发布到 CloudBase 静态托管，并按 [cloudbase/README.md](cloudbase/README.md) 创建集合、云函数、安全规则和索引。`TOKENHUB_API_KEY` 只能配置在 `vision-analyze` 云函数环境中，不能出现在 `.env.local`、网页代码或 Git。
+- 菜单、菜谱、成员、体征和购物清单会自动保存在当前浏览器。
+- 不同浏览器、无痕模式和不同手机之间不会自动同步。
+- 浏览器清理网站数据后，本机记录会丢失。
+- “本机数据”入口可以导出完整 JSON 备份，也可以在另一台设备导入。
+- 食材照片只用于本次编辑时预览，不写入备份，避免浏览器存储被大图片占满。
 
 ## 营养计算约定
 
@@ -55,4 +60,4 @@ NEXT_PUBLIC_SITE_URL=https://你的CloudBase默认域名
 
 ## 数据来源
 
-演示食材保留 USDA FoodData Central 来源编号和版本。正式导入脚本应继续保留来源、版本和缺失字段；不得批量复制版权状态不明确的数据源。
+演示食材保留 USDA FoodData Central 来源编号和版本。正式导入数据时应继续保留来源、版本和缺失字段，不批量复制版权状态不明确的数据源。

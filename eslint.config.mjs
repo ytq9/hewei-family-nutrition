@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "cloudbase/functions/**",
+    "static-dist/**",
     "cloudbase-dist/**",
     "dist/**",
     "next-env.d.ts",

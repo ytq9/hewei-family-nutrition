@@ -18,7 +18,6 @@ import {
   Home,
   Info,
   Leaf,
-  Mail,
   MoreHorizontal,
   Plus,
   RefreshCw,
@@ -36,15 +35,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
-import { emailSchema, memberSchema, otpSchema, recipeSchema } from "./lib/app-schemas";
+import { memberSchema, recipeSchema } from "./lib/app-schemas";
 import { addDays, dateFromKey, formatMenuDate, formatPageDate, formatWeekRange, getWeekDateKeys } from "./lib/date";
-import {
-  analyzeIngredientPhoto,
-  cloudbaseConfigured,
-  sendEmailOtp,
-  uploadIngredientPhoto,
-  verifyEmailOtp,
-} from "./lib/cloudbase-client";
 import {
   driTargets,
   initialMeals,
@@ -53,6 +45,8 @@ import {
   initialShopping,
   initialVitals,
 } from "./lib/demo-data";
+import { createLocalBackup, LOCAL_DATA_KEY, parseLocalBackup, parseLocalData } from "./lib/local-data";
+import type { LocalDataBundle } from "./lib/local-data";
 import {
   allocateRecipe,
   calculateRecipe,
@@ -72,7 +66,7 @@ import type {
 } from "./lib/types";
 
 type TabId = "home" | "menu" | "recipes" | "shopping" | "family";
-type ModalId = "login" | "recipe" | "member" | "vital" | "install" | null;
+type ModalId = "data" | "recipe" | "member" | "vital" | "install" | null;
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -87,6 +81,13 @@ const navItems = [
 ];
 
 const todayDateKey = initialMeals[0]?.date ?? "2026-07-16";
+const initialLocalData: LocalDataBundle = {
+  members: initialMembers,
+  recipes: initialRecipes,
+  meals: initialMeals,
+  shopping: initialShopping,
+  vitals: initialVitals,
+};
 
 const slotMeta = {
   breakfast: { label: "早餐", icon: "晨", color: "amber" },
@@ -265,12 +266,10 @@ function OverflowMenu({ label, actions }: {
 
 export default function NutritionApp() {
   const [activeTab, setActiveTab] = useState<TabId>("home");
-  const [members, setMembers] = useState(initialMembers);
+  const [localData, setLocalData] = useState<LocalDataBundle>(initialLocalData);
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageError, setStorageError] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState(initialMembers[0].id);
-  const [recipes, setRecipes] = useState(initialRecipes);
-  const [meals, setMeals] = useState(initialMeals);
-  const [shopping, setShopping] = useState(initialShopping);
-  const [vitals, setVitals] = useState(initialVitals);
   const [modal, setModal] = useState<ModalId>(null);
   const [toast, setToast] = useState("");
   const [recipeSearch, setRecipeSearch] = useState("");
@@ -278,7 +277,49 @@ export default function NutritionApp() {
   const [selectedMealDate, setSelectedMealDate] = useState(todayDateKey);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const isOnline = useSyncExternalStore(subscribeToConnectivity, getOnlineSnapshot, getServerOnlineSnapshot);
+  const { members, recipes, meals, shopping, vitals } = localData;
   const selectedMember = members.find((member) => member.id === selectedMemberId) ?? members[0];
+  const effectiveSelectedMemberId = selectedMember.id;
+
+  function updateLocalSlice<K extends keyof LocalDataBundle>(key: K, update: React.SetStateAction<LocalDataBundle[K]>) {
+    setLocalData((current) => ({
+      ...current,
+      [key]: typeof update === "function"
+        ? (update as (previous: LocalDataBundle[K]) => LocalDataBundle[K])(current[key])
+        : update,
+    }));
+  }
+
+  const setMembers: React.Dispatch<React.SetStateAction<Member[]>> = (update) => updateLocalSlice("members", update);
+  const setRecipes: React.Dispatch<React.SetStateAction<Recipe[]>> = (update) => updateLocalSlice("recipes", update);
+  const setMeals: React.Dispatch<React.SetStateAction<Meal[]>> = (update) => updateLocalSlice("meals", update);
+  const setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>> = (update) => updateLocalSlice("shopping", update);
+  const setVitals: React.Dispatch<React.SetStateAction<VitalRecord[]>> = (update) => updateLocalSlice("vitals", update);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const saved = window.localStorage.getItem(LOCAL_DATA_KEY);
+        if (saved) setLocalData(parseLocalData(saved));
+      } catch {
+        setStorageError(true);
+      } finally {
+        setStorageReady(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    try {
+      window.localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(localData));
+    } catch {
+      window.queueMicrotask(() => setStorageError(true));
+    }
+  }, [localData, storageReady]);
 
   useEffect(() => {
     const beforeInstall = (event: Event) => {
@@ -302,19 +343,19 @@ export default function NutritionApp() {
 
   const actualNutrition = useMemo(() => {
     const vectors = meals
-      .filter((meal) => meal.date === todayDateKey && meal.status === "confirmed" && meal.participantIds.includes(selectedMemberId))
+      .filter((meal) => meal.date === todayDateKey && meal.status === "confirmed" && meal.participantIds.includes(effectiveSelectedMemberId))
       .flatMap((meal) => meal.dishes)
-      .map((dish) => allocateRecipe(dish.recipeSnapshot, dish.allocationMode, dish.allocations[selectedMemberId] ?? 0));
+      .map((dish) => allocateRecipe(dish.recipeSnapshot, dish.allocationMode, dish.allocations[effectiveSelectedMemberId] ?? 0));
     return vectors.length ? sumVectors(vectors) : Object.fromEntries(nutrientKeys.map((key) => [key, 0])) as NutrientVector;
-  }, [meals, selectedMemberId]);
+  }, [meals, effectiveSelectedMemberId]);
 
   const plannedNutrition = useMemo(() => {
     const vectors = meals
-      .filter((meal) => meal.date === todayDateKey && meal.participantIds.includes(selectedMemberId))
+      .filter((meal) => meal.date === todayDateKey && meal.participantIds.includes(effectiveSelectedMemberId))
       .flatMap((meal) => meal.dishes)
-      .map((dish) => allocateRecipe(dish.recipeSnapshot, dish.allocationMode, dish.allocations[selectedMemberId] ?? 0));
+      .map((dish) => allocateRecipe(dish.recipeSnapshot, dish.allocationMode, dish.allocations[effectiveSelectedMemberId] ?? 0));
     return vectors.length ? sumVectors(vectors) : Object.fromEntries(nutrientKeys.map((key) => [key, 0])) as NutrientVector;
-  }, [meals, selectedMemberId]);
+  }, [meals, effectiveSelectedMemberId]);
 
   const statuses = useMemo(
     () => nutrientKeys.map((key) => getNutritionStatus(actualNutrition[key], { key, target: driTargets[key], upper: key === "sodiumMg" ? 2000 : undefined })),
@@ -391,7 +432,7 @@ export default function NutritionApp() {
     if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onAdd={() => setModal("recipe")} />;
     if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={addRecipeToMenu} />;
     if (activeTab === "shopping") return <ShoppingView shopping={shopping} setShopping={setShopping} notify={notify} />;
-    if (activeTab === "family") return <FamilyView members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onAddMember={() => setModal("member")} onAddVital={() => setModal("vital")} notify={notify} />;
+    if (activeTab === "family") return <FamilyView members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onAddMember={() => setModal("member")} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
     return <HomeView selectedMember={selectedMember} members={members} setSelectedMemberId={setSelectedMemberId} actualNutrition={actualNutrition} plannedNutrition={plannedNutrition} statuses={statuses} meals={meals.filter((meal) => meal.date === todayDateKey)} onConfirm={confirmMeal} onScan={() => setModal("recipe")} onNavigate={setActiveTab} />;
   };
 
@@ -410,14 +451,14 @@ export default function NutritionApp() {
           ))}
         </nav>
         <div className="sidebar-card">
-          <Sparkles size={18} />
-          <strong>让记录更轻松</strong>
-          <p>拍下食材，AI 帮你预填名称与营养标签。</p>
-          <button onClick={() => setModal("recipe")}>拍照识别</button>
+          <Camera size={18} />
+          <strong>照片留在本机</strong>
+          <p>拍下食材作为录入参考，再手工确认名称和重量。</p>
+          <button onClick={() => setModal("recipe")}>拍照录入</button>
         </div>
         <div className="sidebar-foot">
           <button onClick={handleInstall}><Download size={18} />安装到桌面</button>
-          <button onClick={() => setModal("login")}><Settings size={18} />云端设置</button>
+          <button onClick={() => setModal("data")}><Settings size={18} />本机数据</button>
         </div>
       </aside>
 
@@ -429,7 +470,7 @@ export default function NutritionApp() {
           </div>
           <div className="top-actions">
             {!isOnline && <span className="offline-pill"><CircleAlert size={15} />离线</span>}
-            <span className={`mode-pill ${cloudbaseConfigured ? "live" : ""}`}><span />{cloudbaseConfigured ? "CloudBase 已连接" : "体验模式"}</span>
+            <span className={`mode-pill ${storageError ? "" : "live"}`}><span />{storageError ? "本机保存失败" : "本机保存"}</span>
             <button className="profile-button" onClick={() => setActiveTab("family")}><span className="avatar">{selectedMember.avatar}</span><span><strong>{selectedMember.name}</strong><small>查看档案</small></span><ChevronRight size={17} /></button>
           </div>
         </header>
@@ -447,7 +488,7 @@ export default function NutritionApp() {
       <button className="mobile-fab" onClick={() => setModal("recipe")} aria-label="拍照添加食材"><Camera size={23} /></button>
       {toast && <div className="toast" role="status"><Check size={18} />{toast}</div>}
 
-      {modal === "login" && <LoginModal close={() => setModal(null)} notify={notify} />}
+      {modal === "data" && <LocalDataModal data={localData} close={() => setModal(null)} notify={notify} onImport={setLocalData} onReset={() => setLocalData(structuredClone(initialLocalData))} />}
       {modal === "recipe" && <RecipeModal close={() => setModal(null)} addRecipe={(recipe) => { setRecipes((current) => [recipe, ...current]); setModal(null); notify("菜谱已保存"); }} />}
       {modal === "member" && <MemberModal close={() => setModal(null)} addMember={(member) => { setMembers((current) => [...current, member]); setModal(null); notify("家庭成员已添加"); }} />}
       {modal === "vital" && <VitalModal member={selectedMember} close={() => setModal(null)} addVital={(record) => { setVitals((current) => [...current, record]); setModal(null); notify("体征记录已保存"); }} />}
@@ -499,7 +540,7 @@ function HomeView({ selectedMember, members, setSelectedMemberId, actualNutritio
       </section>
 
       <button className="scan-card" onClick={onScan}>
-        <span className="scan-icon"><Camera size={27} /></span><span><small>食材不知道怎么录？</small><strong>拍一下，AI 帮你预填</strong><em>名称、净含量与营养标签都可修改</em></span><ChevronRight size={20} />
+        <span className="scan-icon"><Camera size={27} /></span><span><small>食材不知道怎么录？</small><strong>拍一下，对照照片手工填写</strong><em>照片不会上传，菜名、重量和热量由你确认</em></span><ChevronRight size={20} />
       </button>
 
       <section className="card insight-card"><div className="insight-icon"><Sparkles size={20} /></div><div><span className="eyebrow">今日小提示</span><h3>晚餐加一份深色蔬菜</h3><p>按计划完成晚餐后，钙和膳食纤维仍略低。可以加 100g 菠菜或小油菜。</p></div><button onClick={() => onNavigate("recipes")}>找菜谱</button></section>
@@ -551,55 +592,62 @@ function ShoppingView({ shopping, setShopping, notify }: { shopping: ShoppingIte
   return <div className="shopping-layout"><section className="shopping-hero"><div><span className="eyebrow">未来 3 天菜单</span><h2>采购清单</h2><p>系统已按菜谱份数合并同类食材。</p></div><div className="shopping-score"><strong>{completed}</strong><span>/ {shopping.length} 已购</span></div></section><section className="card shopping-list-card"><div className="card-heading"><div><span className="eyebrow">7月16日—7月18日</span><h3>待采购</h3></div><button className="text-button" onClick={() => notify("已按最新菜单重新汇总")}><RefreshCw size={15} />重新生成</button></div><div className="shopping-input"><input value={newItem} onChange={(event) => setNewItem(event.target.value)} onKeyDown={(event) => event.key === "Enter" && add()} placeholder="手工添加，例如：酸奶" /><button onClick={add}><Plus size={18} />添加</button></div><div className="shopping-items">{shopping.map((item) => { const amount = normalizeShoppingAmount(item.amount, item.unit); return <label key={item.id} className={item.checked ? "checked" : ""}><input type="checkbox" checked={item.checked} onChange={() => setShopping((items) => items.map((current) => current.id === item.id ? { ...current, checked: !current.checked } : current))} /><span className="custom-check"><Check size={14} /></span><span className="item-name"><strong>{item.name}</strong><small>{item.source === "generated" ? "来自菜单" : "手工添加"}</small></span><span className="item-amount">{round(amount.amount, amount.unit === "kg" || amount.unit === "L" ? 1 : 0)} {amount.unit}</span><button onClick={(event) => { event.preventDefault(); setShopping((items) => items.filter((current) => current.id !== item.id)); }} aria-label={`删除${item.name}`}><Trash2 size={17} /></button></label>; })}</div></section><aside className="card shopping-tip"><div className="insight-icon"><Leaf size={20} /></div><h3>减少重复采购</h3><p>重新生成清单时，已勾选的同名食材会继续保留。库存与保质期将在后续版本加入。</p><div className="source-legend"><span><i className="generated" />菜单生成 {shopping.filter((item) => item.source === "generated").length}</span><span><i className="manual" />手工添加 {shopping.filter((item) => item.source === "manual").length}</span></div></aside></div>;
 }
 
-function FamilyView({ members, selectedMember, setSelectedMemberId, vitals, setMembers, onAddMember, onAddVital, notify }: { members: Member[]; selectedMember: Member; setSelectedMemberId: (id: string) => void; vitals: VitalRecord[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; onAddMember: () => void; onAddVital: () => void; notify: (message: string) => void }) {
+function FamilyView({ members, selectedMember, setSelectedMemberId, vitals, setMembers, onAddMember, onAddVital, onManageData }: { members: Member[]; selectedMember: Member; setSelectedMemberId: (id: string) => void; vitals: VitalRecord[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; onAddMember: () => void; onAddVital: () => void; onManageData: () => void }) {
   const memberVitals = vitals.filter((vital) => vital.memberId === selectedMember.id);
   const weights = memberVitals.filter((vital) => vital.type === "weight");
-  return <div className="family-layout"><section className="card family-list"><div className="card-heading"><div><span className="eyebrow">共享家庭</span><h3>林家小厨房</h3></div><button className="round-button" onClick={onAddMember}><Plus size={18} /></button></div><div className="family-members">{members.map((member) => <button key={member.id} className={member.id === selectedMember.id ? "active" : ""} onClick={() => setSelectedMemberId(member.id)}><span className="avatar large">{member.avatar}</span><span><strong>{member.name}</strong><small>{member.relation}</small></span><span className={`share-dot ${member.healthShared ? "on" : ""}`} title={member.healthShared ? "已共享健康数据" : "未共享"} /></button>)}</div><button className="invite-button" onClick={() => notify("邀请链接已复制，有效期 24 小时")}><Mail size={18} />邀请家庭成员</button><div className="privacy-callout"><ShieldCheck size={18} /><p><strong>健康数据仅家庭可见</strong>成人可随时撤回共享；代管成员由监护人管理。</p></div></section><div className="family-main"><section className="profile-hero"><div className="profile-person"><span className="avatar xl">{selectedMember.avatar}</span><div><span className="eyebrow">{selectedMember.managed ? "代管档案" : "本人档案"}</span><h2>{selectedMember.name}</h2><p>{selectedMember.relation} · {selectedMember.heightCm}cm · {selectedMember.weightKg}kg</p></div></div><button className="secondary-button"><Settings size={17} />编辑档案</button><div className="profile-facts"><div><span>活动量</span><strong>{selectedMember.activity === "high" ? "较高" : selectedMember.activity === "medium" ? "中等" : "较低"}</strong></div><div><span>体重目标</span><strong>维持体重</strong></div><div><span>过敏/忌口</span><strong>{selectedMember.allergies.join("、") || "无"}</strong></div><div><span>健康共享</span><button className={`switch ${selectedMember.healthShared ? "on" : ""}`} onClick={() => setMembers((items) => items.map((item) => item.id === selectedMember.id ? { ...item, healthShared: !item.healthShared } : item))}><span /></button></div></div></section><section className="card vitals-card"><div className="card-heading"><div><span className="eyebrow">最近 30 天</span><h3>体征趋势</h3></div><button className="primary-button small" onClick={onAddVital}><Plus size={16} />记录体征</button></div><div className="vital-summary"><div><Weight size={20} /><span><small>最新体重</small><strong>{weights.at(-1)?.value ?? selectedMember.weightKg}<em> kg</em></strong></span><i className="trend-down">↓ 0.8kg</i></div><div><Activity size={20} /><span><small>最近血压</small><strong>{memberVitals.findLast((item) => item.type === "bloodPressure")?.value ?? "—"}<em> / {memberVitals.findLast((item) => item.type === "bloodPressure")?.secondaryValue ?? "—"}</em></strong></span><i>仅作记录</i></div></div><div className="weight-chart" aria-label="体重趋势图">{weights.map((record, index) => <div key={record.id}><span style={{ height: `${50 + (record.value - 57) * 28}px` }} /><small>{index === weights.length - 1 ? "今天" : record.measuredAt.slice(5).replace("-", "/")}</small></div>)}</div></section><section className="card data-card"><div><ShieldCheck size={21} /><span><h3>你的数据权利</h3><p>可以导出个人数据、撤回健康共享或删除账号。删除不会保留体征和个人摄入明细。</p></span></div><div><button className="secondary-button" onClick={() => notify("已准备个人数据导出文件")}><Download size={17} />导出数据</button><button className="danger-button" onClick={() => notify("体验模式不会真正删除数据")}><Trash2 size={17} />删除账号</button></div></section></div></div>;
+  return <div className="family-layout"><section className="card family-list"><div className="card-heading"><div><span className="eyebrow">本机档案</span><h3>我的家庭</h3></div><button className="round-button" onClick={onAddMember} aria-label="添加家庭成员"><Plus size={18} /></button></div><div className="family-members">{members.map((member) => <button key={member.id} className={member.id === selectedMember.id ? "active" : ""} onClick={() => setSelectedMemberId(member.id)}><span className="avatar large">{member.avatar}</span><span><strong>{member.name}</strong><small>{member.relation}</small></span><span className={`share-dot ${member.healthShared ? "on" : ""}`} title={member.healthShared ? "参与本机营养统计" : "不参与本机营养统计"} /></button>)}</div><div className="privacy-callout"><ShieldCheck size={18} /><p><strong>数据只保存在当前浏览器</strong>不会上传服务器；换手机前请先导出备份。</p></div></section><div className="family-main"><section className="profile-hero"><div className="profile-person"><span className="avatar xl">{selectedMember.avatar}</span><div><span className="eyebrow">{selectedMember.managed ? "代管档案" : "本人档案"}</span><h2>{selectedMember.name}</h2><p>{selectedMember.relation} · {selectedMember.heightCm}cm · {selectedMember.weightKg}kg</p></div></div><button className="secondary-button"><Settings size={17} />编辑档案</button><div className="profile-facts"><div><span>活动量</span><strong>{selectedMember.activity === "high" ? "较高" : selectedMember.activity === "medium" ? "中等" : "较低"}</strong></div><div><span>体重目标</span><strong>维持体重</strong></div><div><span>过敏/忌口</span><strong>{selectedMember.allergies.join("、") || "无"}</strong></div><div><span>参与统计</span><button className={`switch ${selectedMember.healthShared ? "on" : ""}`} onClick={() => setMembers((items) => items.map((item) => item.id === selectedMember.id ? { ...item, healthShared: !item.healthShared } : item))}><span /></button></div></div></section><section className="card vitals-card"><div className="card-heading"><div><span className="eyebrow">最近 30 天</span><h3>体征趋势</h3></div><button className="primary-button small" onClick={onAddVital}><Plus size={16} />记录体征</button></div><div className="vital-summary"><div><Weight size={20} /><span><small>最新体重</small><strong>{weights.at(-1)?.value ?? selectedMember.weightKg}<em> kg</em></strong></span><i className="trend-down">↓ 0.8kg</i></div><div><Activity size={20} /><span><small>最近血压</small><strong>{memberVitals.findLast((item) => item.type === "bloodPressure")?.value ?? "—"}<em> / {memberVitals.findLast((item) => item.type === "bloodPressure")?.secondaryValue ?? "—"}</em></strong></span><i>仅作记录</i></div></div><div className="weight-chart" aria-label="体重趋势图">{weights.map((record, index) => <div key={record.id}><span style={{ height: `${50 + (record.value - 57) * 28}px` }} /><small>{index === weights.length - 1 ? "今天" : record.measuredAt.slice(5).replace("-", "/")}</small></div>)}</div></section><section className="card data-card"><div><ShieldCheck size={21} /><span><h3>本机数据管理</h3><p>可以导出完整备份、从另一台设备导入，或者清空当前浏览器里的全部记录。</p></span></div><div><button className="secondary-button" onClick={onManageData}><Download size={17} />导出或导入</button><button className="danger-button" onClick={onManageData}><Trash2 size={17} />清空数据</button></div></section></div></div>;
 }
 
-function LoginModal({ close, notify }: { close: () => void; notify: (message: string) => void }) {
-  const [email, setEmail] = useState(""); const [code, setCode] = useState(""); const [step, setStep] = useState<"email" | "code">("email"); const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
-  const send = async () => { const parsed = emailSchema.safeParse(email); if (!parsed.success) return setError(parsed.error.issues[0].message); setLoading(true); setError(""); try { if (cloudbaseConfigured) await sendEmailOtp(parsed.data); else await new Promise((resolve) => setTimeout(resolve, 600)); setStep("code"); notify(cloudbaseConfigured ? "验证码已发送，请检查邮箱" : "体验模式：任意 6 位验证码均可"); } catch (reason) { setError(reason instanceof Error ? reason.message : "发送失败"); } finally { setLoading(false); } };
-  const verify = async () => { const parsed = otpSchema.safeParse(code); if (!parsed.success) return setError(parsed.error.issues[0].message); setLoading(true); try { if (cloudbaseConfigured) await verifyEmailOtp(parsed.data); else await new Promise((resolve) => setTimeout(resolve, 500)); notify(cloudbaseConfigured ? "CloudBase 登录成功" : "已进入体验模式"); close(); } catch (reason) { setError(reason instanceof Error ? reason.message : "验证失败"); } finally { setLoading(false); } };
-  return <AppModal title={cloudbaseConfigured ? "登录家庭空间" : "连接 CloudBase"} onClose={close}><div className="login-intro"><span className="login-symbol"><Leaf size={28} /></span><h3>{cloudbaseConfigured ? "用邮箱验证码安全登录" : "当前正在使用体验数据"}</h3><p>{cloudbaseConfigured ? "首次验证会自动创建账号，不需要设置密码。" : "配置环境 ID 与 Publishable Key 后，这里会启用真实邮箱验证码。"}</p></div>{step === "email" ? <label className="field"><span>邮箱地址</span><div className="input-with-icon"><Mail size={18} /><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" autoFocus /></div></label> : <label className="field"><span>6 位验证码</span><input className="otp-input" inputMode="numeric" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" autoFocus /></label>}{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<button className="primary-button full" onClick={step === "email" ? send : verify} disabled={loading}>{loading ? "请稍候…" : step === "email" ? "发送验证码" : "验证并登录"}</button>{step === "code" && <button className="text-button center" onClick={() => setStep("email")}><ChevronLeft size={15} />修改邮箱</button>}<p className="privacy-fineprint"><ShieldCheck size={14} />登录即表示你已阅读隐私说明；健康数据需要另行授权。</p></AppModal>;
+function LocalDataModal({ data, close, notify, onImport, onReset }: { data: LocalDataBundle; close: () => void; notify: (message: string) => void; onImport: (data: LocalDataBundle) => void; onReset: () => void }) {
+  const [error, setError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const exportData = () => {
+    const blob = new Blob([createLocalBackup(data)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `禾味日历备份-${todayDateKey}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    notify("本机数据备份已导出");
+  };
+  const importData = async (file: File | undefined) => {
+    if (!file) return;
+    setError("");
+    try {
+      if (file.size > 5 * 1024 * 1024) throw new Error("备份文件不能超过 5MB");
+      onImport(parseLocalBackup(await file.text()));
+      notify("备份已导入并保存在本机");
+      close();
+    } catch (reason) {
+      setError(reason instanceof Error ? `无法导入：${reason.message}` : "无法导入这个备份文件");
+    }
+  };
+  const resetData = () => {
+    if (!window.confirm("确定清空当前浏览器中的菜单、成员、菜谱、体征和购物记录吗？此操作无法撤销。")) return;
+    window.localStorage.removeItem(LOCAL_DATA_KEY);
+    onReset();
+    notify("本机数据已恢复为初始内容");
+    close();
+  };
+  return <AppModal title="本机数据管理" onClose={close}><div className="local-data-intro"><span className="login-symbol"><ShieldCheck size={28} /></span><h3>无需账号，也不上传云端</h3><p>网页会把菜单和健康记录保存在这个浏览器中。清理浏览器数据或更换设备前，请先导出备份。</p></div><div className="local-data-actions"><button className="primary-button" onClick={exportData}><Download size={17} />导出 JSON 备份</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><Upload size={17} />导入备份</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(event) => importData(event.target.files?.[0])} /></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="local-data-danger"><div><strong>恢复初始数据</strong><p>删除当前浏览器中保存的全部修改，并恢复示例菜单。</p></div><button className="danger-button" onClick={resetData}><Trash2 size={17} />清空</button></div></AppModal>;
 }
 
 function RecipeModal({ close, addRecipe }: { close: () => void; addRecipe: (recipe: Recipe) => void }) {
-  const [images, setImages] = useState<string[]>([]); const [analyzing, setAnalyzing] = useState(false); const [suggested, setSuggested] = useState(false); const [error, setError] = useState(""); const [form, setForm] = useState({ name: "", ingredientName: "", amountG: "", yieldServings: "3", energy: "", state: "raw" as "raw" | "cooked" | "packaged" }); const fileRef = useRef<HTMLInputElement>(null);
+  const [images, setImages] = useState<string[]>([]); const [error, setError] = useState(""); const [form, setForm] = useState({ name: "", ingredientName: "", amountG: "", yieldServings: "3", energy: "", state: "raw" as "raw" | "cooked" | "packaged" }); const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => () => images.forEach((image) => URL.revokeObjectURL(image)), [images]);
   const filesChanged = async (files: FileList | null) => {
     if (!files) return;
-    setAnalyzing(true);
-    setSuggested(false);
     setError("");
     try {
       const selected = await Promise.all(Array.from(files).slice(0, 3).map(compressPhoto));
       setImages(selected.map((file) => URL.createObjectURL(file)));
-      if (cloudbaseConfigured) {
-        const fileIds = await Promise.all(selected.map(uploadIngredientPhoto));
-        const result = await analyzeIngredientPhoto(fileIds);
-        const candidate = result.candidates[0];
-        if (!candidate) throw new Error("没有识别到可靠食材，请手工录入");
-        setForm((current) => ({
-          ...current,
-          name: candidate.name,
-          ingredientName: candidate.name,
-          amountG: candidate.visibleWeightG?.toString() ?? "",
-          energy: result.labelNutritionPer100g?.energyKcal?.toString() ?? "",
-          state: candidate.state,
-        }));
-      } else {
-        await new Promise((resolve) => window.setTimeout(resolve, 900));
-        setForm({ name: "清炒时蔬", ingredientName: "西兰花", amountG: "", yieldServings: "3", energy: "34", state: "raw" });
-      }
-      setSuggested(true);
     } catch (reason) {
-      setError(`${reason instanceof Error ? reason.message : "图片识别失败"}；你仍可直接手工填写。`);
-    } finally {
-      setAnalyzing(false);
+      setError(`${reason instanceof Error ? reason.message : "图片读取失败"}；你仍可直接手工填写。`);
     }
   };
-  const save = () => { const parsed = recipeSchema.safeParse(form); const energyParsed = z.coerce.number().nonnegative().safeParse(form.energy); if (!parsed.success) return setError(parsed.error.issues[0].message); if (!energyParsed.success) return setError("请输入每 100g 热量"); const now = new Date(); addRecipe({ id: `recipe-${now.getTime()}`, name: parsed.data.name, description: "来自食材照片，可继续补充做法和营养标签。", category: "dinner", favorite: false, yieldServings: parsed.data.yieldServings, finishedWeightG: parsed.data.amountG, tags: ["自定义"], updatedAt: "刚刚", image: images[0], ingredients: [{ id: `ingredient-${now.getTime()}`, amountG: parsed.data.amountG, edibleRatio: 1, food: { id: `food-${now.getTime()}`, name: parsed.data.ingredientName, aliases: [], state: form.state, source: "custom", sourceVersion: now.toISOString().slice(0, 10), nutrientsPer100g: customNutrition(energyParsed.data) } }] }); };
-  return <AppModal title="拍照或手工创建菜谱" onClose={close} wide><div className="photo-uploader" onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" accept="image/jpeg,image/png" capture="environment" multiple hidden onChange={(event) => filesChanged(event.target.files)} />{images.length ? <div className="preview-grid">{images.map((image) => <img src={image} alt="待识别食材" key={image} width={240} height={174} />)}{images.length < 3 && <span><Plus size={22} />再加一张</span>}</div> : <><span className="camera-ring"><Camera size={28} /></span><strong>拍下食材或包装营养标签</strong><small>支持 JPEG / PNG，最多 3 张，自动压缩至最长边 1600px</small><button type="button"><Upload size={17} />选择照片</button></>}{analyzing && <div className="analysis-overlay"><Sparkles size={22} />AI 正在识别候选信息…</div>}</div>{suggested && <div className="ai-result"><Sparkles size={18} /><div><strong>候选：{form.ingredientName}</strong><p>{form.amountG ? `识别到可见重量 ${form.amountG}g` : "图片没有可靠重量，请确认称重信息。"}</p></div><span>待确认</span></div>}<div className="form-grid"><label className="field"><span>菜名</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：番茄炒蛋" /></label><label className="field"><span>主要食材</span><input value={form.ingredientName} onChange={(event) => setForm({ ...form, ingredientName: event.target.value })} placeholder="例如：番茄" /></label><label className="field"><span>食材重量（g）</span><input type="number" value={form.amountG} onChange={(event) => setForm({ ...form, amountG: event.target.value })} placeholder="必须由你确认" /></label><label className="field"><span>出品份数</span><input type="number" value={form.yieldServings} onChange={(event) => setForm({ ...form, yieldServings: event.target.value })} /></label><label className="field"><span>每 100g 热量（kcal）</span><input type="number" value={form.energy} onChange={(event) => setForm({ ...form, energy: event.target.value })} placeholder="来自标签或食材库" /></label><label className="field"><span>食材状态</span><select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value as typeof form.state })}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />确认并保存</button></div></AppModal>;
+  const save = () => { const parsed = recipeSchema.safeParse(form); const energyParsed = z.coerce.number().nonnegative().safeParse(form.energy); if (!parsed.success) return setError(parsed.error.issues[0].message); if (!energyParsed.success) return setError("请输入每 100g 热量"); const now = new Date(); addRecipe({ id: `recipe-${now.getTime()}`, name: parsed.data.name, description: "本机手工创建的菜谱，可继续补充做法和营养标签。", category: "dinner", favorite: false, yieldServings: parsed.data.yieldServings, finishedWeightG: parsed.data.amountG, tags: ["自定义"], updatedAt: "刚刚", ingredients: [{ id: `ingredient-${now.getTime()}`, amountG: parsed.data.amountG, edibleRatio: 1, food: { id: `food-${now.getTime()}`, name: parsed.data.ingredientName, aliases: [], state: form.state, source: "custom", sourceVersion: now.toISOString().slice(0, 10), nutrientsPer100g: customNutrition(energyParsed.data) } }] }); };
+  return <AppModal title="拍照或手工创建菜谱" onClose={close} wide><div className="photo-uploader" onClick={() => fileRef.current?.click()}><input ref={fileRef} type="file" accept="image/jpeg,image/png" capture="environment" multiple hidden onChange={(event) => filesChanged(event.target.files)} />{images.length ? <div className="preview-grid">{images.map((image) => <img src={image} alt="食材录入参考" key={image} width={240} height={174} />)}{images.length < 3 && <span><Plus size={22} />再加一张</span>}</div> : <><span className="camera-ring"><Camera size={28} /></span><strong>拍下食材或包装营养标签</strong><small>支持 JPEG / PNG，最多 3 张，仅在本次编辑中预览</small><button type="button"><Upload size={17} />选择照片</button></>}</div><div className="local-photo-note"><ShieldCheck size={18} /><div><strong>静态版不会上传或识别照片</strong><p>请对照照片或包装标签，手工确认菜名、重量和每 100g 热量。</p></div></div><div className="form-grid"><label className="field"><span>菜名</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：番茄炒蛋" /></label><label className="field"><span>主要食材</span><input value={form.ingredientName} onChange={(event) => setForm({ ...form, ingredientName: event.target.value })} placeholder="例如：番茄" /></label><label className="field"><span>食材重量（g）</span><input type="number" value={form.amountG} onChange={(event) => setForm({ ...form, amountG: event.target.value })} placeholder="必须由你确认" /></label><label className="field"><span>出品份数</span><input type="number" value={form.yieldServings} onChange={(event) => setForm({ ...form, yieldServings: event.target.value })} /></label><label className="field"><span>每 100g 热量（kcal）</span><input type="number" value={form.energy} onChange={(event) => setForm({ ...form, energy: event.target.value })} placeholder="来自标签或食材库" /></label><label className="field"><span>食材状态</span><select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value as typeof form.state })}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />确认并保存</button></div></AppModal>;
 }
 
 function MemberModal({ close, addMember }: { close: () => void; addMember: (member: Member) => void }) {
