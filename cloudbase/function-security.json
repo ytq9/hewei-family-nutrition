@@ -1,0 +1,5 @@
+{
+  "nutrition-api": { "invoke": "auth != null" },
+  "vision-analyze": { "invoke": "auth != null" },
+  "*": { "invoke": false }
+}
