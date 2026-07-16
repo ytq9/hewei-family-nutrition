@@ -22,6 +22,8 @@ test("renders the family nutrition product shell", async () => {
   assert.match(html, /一日三餐/);
   assert.match(html, /今日餐单/);
   assert.match(html, /本机保存/);
+  assert.match(html, /手工新建菜谱/);
+  assert.doesNotMatch(html, /拍照|拍食材|选择照片/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
