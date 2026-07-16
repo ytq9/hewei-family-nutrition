@@ -158,6 +158,7 @@ main { min-width: 0; padding-bottom: 40px; }
   .recipe-footer { align-items: flex-start; flex-direction: column; }
   .recipe-footer-actions { width: 100%; }
   .recipe-footer-actions button { flex: 1; justify-content: center; }
+  .profile-hero > .secondary-button { display: inline-flex; justify-self: start; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }

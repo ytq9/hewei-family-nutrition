@@ -10,6 +10,13 @@ export const memberSchema = z.object({
   driSex: z.enum(["female", "male"]),
 });
 
+export const memberProfileSchema = memberSchema.extend({
+  heightCm: z.coerce.number().min(30, "身高不能小于 30cm").max(250, "身高不能超过 250cm"),
+  weightKg: z.coerce.number().positive("体重必须大于 0").max(500, "体重不能超过 500kg"),
+  activity: z.enum(["low", "medium", "high"]),
+  goal: z.enum(["maintain", "lose", "gain"]),
+});
+
 export const recipeSchema = z.object({
   name: z.string().trim().min(1, "请输入菜名").max(40),
   ingredientName: z.string().trim().min(1, "请输入食材名称").max(40),
