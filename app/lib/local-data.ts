@@ -4,6 +4,7 @@ import type { Meal, Member, Recipe, ShoppingItem, VitalRecord } from "./types";
 export const LOCAL_DATA_KEY = "hewei-local-data-v1";
 
 export type LocalDataBundle = {
+  householdName: string;
   members: Member[];
   recipes: Recipe[];
   meals: Meal[];
@@ -104,6 +105,7 @@ const vitalDataSchema = z.object({
   note: z.string().optional(),
 });
 const localDataSchema = z.object({
+  householdName: z.string().trim().min(1).max(30).default("我的家庭"),
   members: z.array(memberDataSchema).min(1),
   recipes: z.array(recipeDataSchema),
   meals: z.array(mealDataSchema),

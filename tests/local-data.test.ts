@@ -5,6 +5,7 @@ import { createLocalBackup, parseLocalBackup, parseLocalData } from "../app/lib/
 import type { LocalDataBundle } from "../app/lib/local-data.ts";
 
 const data: LocalDataBundle = {
+  householdName: "温暖的家",
   members: [{
     id: "member-1",
     name: "测试成员",
@@ -29,7 +30,14 @@ const data: LocalDataBundle = {
 test("round-trips a static-site backup", () => {
   const restored = parseLocalBackup(createLocalBackup(data));
   assert.equal(restored.members[0].name, "测试成员");
+  assert.equal(restored.householdName, "温暖的家");
   assert.equal(restored.meals.length, 0);
+});
+
+test("adds a default household name when loading older browser data", () => {
+  const legacyData: Partial<LocalDataBundle> = { ...data };
+  delete legacyData.householdName;
+  assert.equal(parseLocalData(JSON.stringify(legacyData)).householdName, "我的家庭");
 });
 
 test("rejects unrelated or incomplete browser data", () => {

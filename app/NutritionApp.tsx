@@ -66,7 +66,7 @@ import type {
 } from "./lib/types";
 
 type TabId = "home" | "menu" | "recipes" | "shopping" | "family";
-type ModalId = "data" | "recipe" | "recipeEdit" | "meal" | "mealEdit" | "member" | "memberEdit" | "vital" | "install" | null;
+type ModalId = "data" | "recipe" | "recipeEdit" | "meal" | "mealEdit" | "member" | "memberEdit" | "householdEdit" | "vital" | "install" | null;
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -82,6 +82,7 @@ const navItems = [
 
 const todayDateKey = initialMeals[0]?.date ?? "2026-07-16";
 const initialLocalData: LocalDataBundle = {
+  householdName: "我的家庭",
   members: initialMembers,
   recipes: initialRecipes,
   meals: initialMeals,
@@ -264,7 +265,7 @@ export default function NutritionApp() {
   const [selectedMealDate, setSelectedMealDate] = useState(todayDateKey);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const isOnline = useSyncExternalStore(subscribeToConnectivity, getOnlineSnapshot, getServerOnlineSnapshot);
-  const { members, recipes, meals, shopping, vitals } = localData;
+  const { householdName, members, recipes, meals, shopping, vitals } = localData;
   const selectedMember = members.find((member) => member.id === selectedMemberId) ?? members[0];
   const effectiveSelectedMemberId = selectedMember.id;
 
@@ -278,6 +279,7 @@ export default function NutritionApp() {
   }
 
   const setMembers: React.Dispatch<React.SetStateAction<Member[]>> = (update) => updateLocalSlice("members", update);
+  const setHouseholdName = (name: string) => updateLocalSlice("householdName", name);
   const setRecipes: React.Dispatch<React.SetStateAction<Recipe[]>> = (update) => updateLocalSlice("recipes", update);
   const setMeals: React.Dispatch<React.SetStateAction<Meal[]>> = (update) => updateLocalSlice("meals", update);
   const setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>> = (update) => updateLocalSlice("shopping", update);
@@ -433,7 +435,7 @@ export default function NutritionApp() {
     if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onEdit={(meal) => { setEditingMeal(meal); setModal("mealEdit"); }} onAdd={(slot) => { setPlacingRecipeId(null); setPlacingMealSlot(slot ?? null); setModal("meal"); }} />;
     if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onEdit={(recipe) => { setEditingRecipe(recipe); setModal("recipeEdit"); }} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={(recipe) => { setPlacingRecipeId(recipe.id); setPlacingMealSlot(null); setActiveTab("menu"); setModal("meal"); }} />;
     if (activeTab === "shopping") return <ShoppingView shopping={shopping} setShopping={setShopping} notify={notify} />;
-    if (activeTab === "family") return <FamilyView members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onAddMember={() => setModal("member")} onEditMember={(member) => { setEditingMember(member); setModal("memberEdit"); }} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
+    if (activeTab === "family") return <FamilyView householdName={householdName} members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onEditHousehold={() => setModal("householdEdit")} onAddMember={() => setModal("member")} onEditMember={(member) => { setEditingMember(member); setModal("memberEdit"); }} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
     return <HomeView selectedMember={selectedMember} members={members} setSelectedMemberId={setSelectedMemberId} actualNutrition={actualNutrition} plannedNutrition={plannedNutrition} statuses={statuses} meals={meals.filter((meal) => meal.date === todayDateKey)} onConfirm={confirmMeal} onCreateRecipe={() => setModal("recipe")} onNavigate={setActiveTab} />;
   };
 
@@ -496,6 +498,7 @@ export default function NutritionApp() {
       {modal === "mealEdit" && editingMeal && <MealEditModal meal={editingMeal} members={members} close={() => { setModal(null); setEditingMeal(null); }} saveMeal={saveMealDetails} />}
       {modal === "member" && <MemberModal close={() => setModal(null)} addMember={(member) => { setMembers((current) => [...current, member]); setModal(null); notify("家庭成员已添加"); }} />}
       {modal === "memberEdit" && editingMember && <MemberEditModal member={editingMember} close={() => { setModal(null); setEditingMember(null); }} saveMember={(updated) => { setMembers((current) => current.map((member) => member.id === updated.id ? updated : member)); setModal(null); setEditingMember(null); notify("成员档案已保存"); }} />}
+      {modal === "householdEdit" && <HouseholdNameModal householdName={householdName} close={() => setModal(null)} saveName={(name) => { setHouseholdName(name); setModal(null); notify("家庭名称已保存"); }} />}
       {modal === "vital" && <VitalModal member={selectedMember} close={() => setModal(null)} addVital={(record) => { setVitals((current) => [...current, record]); setModal(null); notify("体征记录已保存"); }} />}
       {modal === "install" && <AppModal title="添加到手机主屏幕" onClose={() => setModal(null)}><div className="install-steps"><div><span>1</span><p><strong>iPhone Safari</strong>点击分享按钮，再选择“添加到主屏幕”。</p></div><div><span>2</span><p><strong>Android Chrome</strong>打开浏览器菜单，选择“安装应用”。</p></div><div><span>3</span><p><strong>电脑浏览器</strong>点击地址栏右侧的安装图标。</p></div></div><button className="primary-button full" onClick={() => setModal(null)}>知道了</button></AppModal>}
     </div>
@@ -598,14 +601,14 @@ function ShoppingView({ shopping, setShopping, notify }: { shopping: ShoppingIte
   return <div className="shopping-layout"><section className="shopping-hero"><div><span className="eyebrow">未来 3 天菜单</span><h2>采购清单</h2><p>系统已按菜谱份数合并同类食材。</p></div><div className="shopping-score"><strong>{completed}</strong><span>/ {shopping.length} 已购</span></div></section><section className="card shopping-list-card"><div className="card-heading"><div><span className="eyebrow">7月16日—7月18日</span><h3>待采购</h3></div><button className="text-button" onClick={() => notify("已按最新菜单重新汇总")}><RefreshCw size={15} />重新生成</button></div><div className="shopping-input"><input value={newItem} onChange={(event) => setNewItem(event.target.value)} onKeyDown={(event) => event.key === "Enter" && add()} placeholder="手工添加，例如：酸奶" /><button onClick={add}><Plus size={18} />添加</button></div><div className="shopping-items">{shopping.map((item) => { const amount = normalizeShoppingAmount(item.amount, item.unit); return <label key={item.id} className={item.checked ? "checked" : ""}><input type="checkbox" checked={item.checked} onChange={() => setShopping((items) => items.map((current) => current.id === item.id ? { ...current, checked: !current.checked } : current))} /><span className="custom-check"><Check size={14} /></span><span className="item-name"><strong>{item.name}</strong><small>{item.source === "generated" ? "来自菜单" : "手工添加"}</small></span><span className="item-amount">{round(amount.amount, amount.unit === "kg" || amount.unit === "L" ? 1 : 0)} {amount.unit}</span><button onClick={(event) => { event.preventDefault(); setShopping((items) => items.filter((current) => current.id !== item.id)); }} aria-label={`删除${item.name}`}><Trash2 size={17} /></button></label>; })}</div></section><aside className="card shopping-tip"><div className="insight-icon"><Leaf size={20} /></div><h3>减少重复采购</h3><p>重新生成清单时，已勾选的同名食材会继续保留。库存与保质期将在后续版本加入。</p><div className="source-legend"><span><i className="generated" />菜单生成 {shopping.filter((item) => item.source === "generated").length}</span><span><i className="manual" />手工添加 {shopping.filter((item) => item.source === "manual").length}</span></div></aside></div>;
 }
 
-function FamilyView({ members, selectedMember, setSelectedMemberId, vitals, setMembers, onAddMember, onEditMember, onAddVital, onManageData }: { members: Member[]; selectedMember: Member; setSelectedMemberId: (id: string) => void; vitals: VitalRecord[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; onAddMember: () => void; onEditMember: (member: Member) => void; onAddVital: () => void; onManageData: () => void }) {
+function FamilyView({ householdName, members, selectedMember, setSelectedMemberId, vitals, setMembers, onEditHousehold, onAddMember, onEditMember, onAddVital, onManageData }: { householdName: string; members: Member[]; selectedMember: Member; setSelectedMemberId: (id: string) => void; vitals: VitalRecord[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; onEditHousehold: () => void; onAddMember: () => void; onEditMember: (member: Member) => void; onAddVital: () => void; onManageData: () => void }) {
   const memberVitals = vitals.filter((vital) => vital.memberId === selectedMember.id);
   const weights = memberVitals.filter((vital) => vital.type === "weight");
   const goalLabel = selectedMember.goal === "lose" ? "减重" : selectedMember.goal === "gain" ? "增重" : "维持体重";
   return (
     <div className="family-layout">
       <section className="card family-list">
-        <div className="card-heading"><div><span className="eyebrow">本机档案</span><h3>我的家庭</h3></div><button className="round-button" onClick={onAddMember} aria-label="添加家庭成员"><Plus size={18} /></button></div>
+        <div className="card-heading"><div><span className="eyebrow">本机档案</span><div className="family-title-row"><h3>{householdName}</h3><button onClick={onEditHousehold} aria-label="编辑家庭名称" title="编辑家庭名称"><Pencil size={14} /></button></div></div><button className="round-button" onClick={onAddMember} aria-label="添加家庭成员"><Plus size={18} /></button></div>
         <div className="family-members">{members.map((member) => <button key={member.id} className={member.id === selectedMember.id ? "active" : ""} onClick={() => setSelectedMemberId(member.id)}><span className="avatar large">{member.avatar}</span><span><strong>{member.name}</strong><small>{member.relation}</small></span><span className={`share-dot ${member.healthShared ? "on" : ""}`} title={member.healthShared ? "参与本机营养统计" : "不参与本机营养统计"} /></button>)}</div>
         <div className="privacy-callout"><ShieldCheck size={18} /><p><strong>数据只保存在当前浏览器</strong>不会上传服务器；换手机前请先导出备份。</p></div>
       </section>
@@ -765,6 +768,18 @@ function RecipeModal({ close, addRecipe }: { close: () => void; addRecipe: (reci
     addRecipe({ id: `recipe-${now.getTime()}`, name: parsed.data.name, description: form.description.trim(), favorite: false, yieldServings: parsed.data.yieldServings, finishedWeightG: parsed.data.amountG, tags: form.tags.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean), updatedAt: "刚刚", ingredients: [{ id: `ingredient-${now.getTime()}`, amountG: parsed.data.amountG, edibleRatio: 1, food: { id: `food-${now.getTime()}`, name: parsed.data.ingredientName, aliases: [], state: form.state, source: "custom", sourceVersion: now.toISOString().slice(0, 10), nutrientsPer100g: customNutrition(energyParsed.data, optionalValues[0], optionalValues[1], optionalValues[2]) } }] });
   };
   return <AppModal title="手工创建菜谱" onClose={close} wide><div className="manual-entry-note"><Utensils size={18} /><div><strong>手工录入菜谱</strong><p>填写菜名、食材重量和营养数据，保存后仍可添加更多食材或继续编辑。</p></div></div><div className="form-grid"><label className="field"><span>菜名</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：番茄炒蛋" /></label><label className="field"><span>主要食材</span><input value={form.ingredientName} onChange={(event) => setForm({ ...form, ingredientName: event.target.value })} placeholder="例如：番茄" /></label><label className="field span-two"><span>备注 / 菜谱说明</span><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} rows={3} placeholder="记录做法、口味或注意事项" /></label><label className="field span-two"><span>标签（用顿号或逗号分隔）</span><input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="例如：家常、快手、高蛋白" /></label><label className="field"><span>食材重量（g）</span><input type="number" value={form.amountG} onChange={(event) => setForm({ ...form, amountG: event.target.value })} placeholder="请输入重量" /></label><label className="field"><span>出品份数</span><input type="number" value={form.yieldServings} onChange={(event) => setForm({ ...form, yieldServings: event.target.value })} /></label><label className="field"><span>食材状态</span><select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value as typeof form.state })}><option value="raw">生鲜/原始</option><option value="cooked">熟制</option><option value="packaged">包装食品</option></select></label><span className="field nutrition-group-label"><span>以下均为每 100g，可从包装标签录入</span></span><label className="field"><span>热量（kcal）</span><input type="number" min="0" step="0.1" value={form.energy} onChange={(event) => setForm({ ...form, energy: event.target.value })} placeholder="必填" /></label><label className="field"><span>蛋白质（g）</span><input type="number" min="0" step="0.1" value={form.protein} onChange={(event) => setForm({ ...form, protein: event.target.value })} placeholder="可留空" /></label><label className="field"><span>脂肪（g）</span><input type="number" min="0" step="0.1" value={form.fat} onChange={(event) => setForm({ ...form, fat: event.target.value })} placeholder="可留空" /></label><label className="field"><span>碳水化合物（g）</span><input type="number" min="0" step="0.1" value={form.carbohydrate} onChange={(event) => setForm({ ...form, carbohydrate: event.target.value })} placeholder="可留空" /></label></div>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />确认并保存</button></div></AppModal>;
+}
+
+function HouseholdNameModal({ householdName, close, saveName }: { householdName: string; close: () => void; saveName: (name: string) => void }) {
+  const [name, setName] = useState(householdName);
+  const [error, setError] = useState("");
+  const save = () => {
+    const normalized = name.trim();
+    if (!normalized) return setError("请输入家庭名称");
+    if (normalized.length > 30) return setError("家庭名称不能超过 30 个字符");
+    saveName(normalized);
+  };
+  return <AppModal title="编辑家庭名称" onClose={close}><label className="field"><span>家庭名称</span><input value={name} maxLength={30} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && save()} placeholder="例如：三木的小家" autoFocus /><small>{name.length}/30 个字符</small></label>{error && <p className="form-error"><CircleAlert size={15} />{error}</p>}<div className="reference-note"><Info size={16} /><p>家庭名称只用于当前浏览器中的家庭页面和数据备份，不会公开显示。</p></div><div className="modal-actions"><button className="secondary-button" onClick={close}>取消</button><button className="primary-button" onClick={save}><Check size={17} />保存名称</button></div></AppModal>;
 }
 
 function MemberEditModal({ member, close, saveMember }: { member: Member; close: () => void; saveMember: (member: Member) => void }) {
