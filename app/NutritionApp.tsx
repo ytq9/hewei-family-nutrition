@@ -50,9 +50,9 @@ import {
   allocateRecipe,
   calculateRecipe,
   getNutritionStatus,
-  normalizeShoppingAmount,
   sumVectors,
 } from "./lib/nutrition";
+import { convertShoppingAmount, generateShoppingFromMeals } from "./lib/shopping";
 import { nutrientKeys } from "./lib/types";
 import type {
   Meal,
@@ -434,7 +434,7 @@ export default function NutritionApp() {
   const renderView = () => {
     if (activeTab === "menu") return <MenuView meals={meals} members={members} mode={mealView} setMode={setMealView} selectedDate={selectedMealDate} todayDate={todayDateKey} onSelectDate={setSelectedMealDate} onConfirm={confirmMeal} onCopy={copyMeal} onReset={resetMeal} onDelete={deleteMeal} onEdit={(meal) => { setEditingMeal(meal); setModal("mealEdit"); }} onAdd={(slot) => { setPlacingRecipeId(null); setPlacingMealSlot(slot ?? null); setModal("meal"); }} />;
     if (activeTab === "recipes") return <RecipesView recipes={recipes} search={recipeSearch} setSearch={setRecipeSearch} onFavorite={(id) => setRecipes((current) => current.map((recipe) => recipe.id === id ? { ...recipe, favorite: !recipe.favorite } : recipe))} onEdit={(recipe) => { setEditingRecipe(recipe); setModal("recipeEdit"); }} onDuplicate={duplicateRecipe} onDelete={deleteRecipe} onAdd={() => setModal("recipe")} onUse={(recipe) => { setPlacingRecipeId(recipe.id); setPlacingMealSlot(null); setActiveTab("menu"); setModal("meal"); }} />;
-    if (activeTab === "shopping") return <ShoppingView shopping={shopping} setShopping={setShopping} notify={notify} />;
+    if (activeTab === "shopping") return <ShoppingView shopping={shopping} meals={meals} initialDate={selectedMealDate} setShopping={setShopping} notify={notify} />;
     if (activeTab === "family") return <FamilyView householdName={householdName} members={members} selectedMember={selectedMember} setSelectedMemberId={setSelectedMemberId} vitals={vitals} setMembers={setMembers} onEditHousehold={() => setModal("householdEdit")} onAddMember={() => setModal("member")} onEditMember={(member) => { setEditingMember(member); setModal("memberEdit"); }} onAddVital={() => setModal("vital")} onManageData={() => setModal("data")} />;
     return <HomeView selectedMember={selectedMember} members={members} setSelectedMemberId={setSelectedMemberId} actualNutrition={actualNutrition} plannedNutrition={plannedNutrition} statuses={statuses} meals={meals.filter((meal) => meal.date === todayDateKey)} onConfirm={confirmMeal} onCreateRecipe={() => setModal("recipe")} onNavigate={setActiveTab} />;
   };
@@ -594,11 +594,100 @@ function RecipesView({ recipes, search, setSearch, onFavorite, onEdit, onDuplica
   return <div className="page-stack"><div className="page-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索菜名、食材、备注或标签" /></label><button className="primary-button" onClick={onAdd} aria-label="新建菜谱"><Plus size={18} />新建菜谱</button></div><div className="recipe-grid">{filtered.map((recipe, index) => { const total = calculateRecipe(recipe); return <article className="recipe-card" key={recipe.id}><div className={`recipe-visual visual-${index % 3}`}><span>{recipe.tags[0] ?? "自定义"}</span><Utensils size={36} /><button onClick={() => onFavorite(recipe.id)} className={recipe.favorite ? "favorite" : ""} aria-label={recipe.favorite ? "取消收藏" : "收藏"}><Heart size={19} fill={recipe.favorite ? "currentColor" : "none"} /></button></div><div className="recipe-body"><div className="recipe-title"><div><span className="eyebrow">{recipe.yieldServings} 份 · {recipe.ingredients.length} 种食材</span><h3>{recipe.name}</h3></div><OverflowMenu label={`${recipe.name}更多操作`} actions={[{ label: "编辑菜谱", icon: <Pencil size={16} />, onSelect: () => onEdit(recipe) }, { label: "安排到菜单", icon: <CalendarDays size={16} />, onSelect: () => onUse(recipe) }, { label: "复制菜谱", icon: <Copy size={16} />, onSelect: () => onDuplicate(recipe) }, { label: recipe.favorite ? "取消收藏" : "收藏菜谱", icon: <Heart size={16} />, onSelect: () => onFavorite(recipe.id) }, { label: "删除菜谱", icon: <Trash2 size={16} />, onSelect: () => onDelete(recipe.id), danger: true }]} /></div><p>{recipe.description || "暂无备注"}</p><div className="recipe-stats"><span><strong>{Math.round((total.energyKcal ?? 0) / recipe.yieldServings)}</strong> kcal/份</span><span><strong>{round((total.proteinG ?? 0) / recipe.yieldServings, 1)}</strong>g 蛋白质</span><span>{recipe.tags.join(" · ") || "无标签"}</span></div><div className="recipe-footer"><small>更新于 {recipe.updatedAt}</small><div className="recipe-footer-actions"><button className="edit-recipe" onClick={() => onEdit(recipe)}><Pencil size={15} />编辑</button><button onClick={() => onUse(recipe)}>安排菜单 <Plus size={16} /></button></div></div></div></article>; })}</div>{filtered.length === 0 && <div className="empty-state"><Search size={28} /><h3>没有找到相关菜谱</h3><p>换个关键词，或者新建一份菜谱。</p></div>}</div>;
 }
 
-function ShoppingView({ shopping, setShopping, notify }: { shopping: ShoppingItem[]; setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>>; notify: (message: string) => void }) {
+function ShoppingView({ shopping, meals, initialDate, setShopping, notify }: { shopping: ShoppingItem[]; meals: Meal[]; initialDate: string; setShopping: React.Dispatch<React.SetStateAction<ShoppingItem[]>>; notify: (message: string) => void }) {
+  const units: ShoppingItem["unit"][] = ["g", "kg", "ml", "L", "个", "包", "盒"];
+  const [startDate, setStartDate] = useState(initialDate);
+  const [endDate, setEndDate] = useState(addDays(initialDate, 2));
   const [newItem, setNewItem] = useState("");
+  const [newAmount, setNewAmount] = useState("1");
+  const [newUnit, setNewUnit] = useState<ShoppingItem["unit"]>("包");
+  const [rangeError, setRangeError] = useState("");
   const completed = shopping.filter((item) => item.checked).length;
-  const add = () => { if (!newItem.trim()) return; setShopping((items) => [...items, { id: `s-${Date.now()}`, name: newItem.trim(), amount: 1, unit: "包", checked: false, source: "manual" }]); setNewItem(""); };
-  return <div className="shopping-layout"><section className="shopping-hero"><div><span className="eyebrow">未来 3 天菜单</span><h2>采购清单</h2><p>系统已按菜谱份数合并同类食材。</p></div><div className="shopping-score"><strong>{completed}</strong><span>/ {shopping.length} 已购</span></div></section><section className="card shopping-list-card"><div className="card-heading"><div><span className="eyebrow">7月16日—7月18日</span><h3>待采购</h3></div><button className="text-button" onClick={() => notify("已按最新菜单重新汇总")}><RefreshCw size={15} />重新生成</button></div><div className="shopping-input"><input value={newItem} onChange={(event) => setNewItem(event.target.value)} onKeyDown={(event) => event.key === "Enter" && add()} placeholder="手工添加，例如：酸奶" /><button onClick={add}><Plus size={18} />添加</button></div><div className="shopping-items">{shopping.map((item) => { const amount = normalizeShoppingAmount(item.amount, item.unit); return <label key={item.id} className={item.checked ? "checked" : ""}><input type="checkbox" checked={item.checked} onChange={() => setShopping((items) => items.map((current) => current.id === item.id ? { ...current, checked: !current.checked } : current))} /><span className="custom-check"><Check size={14} /></span><span className="item-name"><strong>{item.name}</strong><small>{item.source === "generated" ? "来自菜单" : "手工添加"}</small></span><span className="item-amount">{round(amount.amount, amount.unit === "kg" || amount.unit === "L" ? 1 : 0)} {amount.unit}</span><button onClick={(event) => { event.preventDefault(); setShopping((items) => items.filter((current) => current.id !== item.id)); }} aria-label={`删除${item.name}`}><Trash2 size={17} /></button></label>; })}</div></section><aside className="card shopping-tip"><div className="insight-icon"><Leaf size={20} /></div><h3>减少重复采购</h3><p>重新生成清单时，已勾选的同名食材会继续保留。库存与保质期将在后续版本加入。</p><div className="source-legend"><span><i className="generated" />菜单生成 {shopping.filter((item) => item.source === "generated").length}</span><span><i className="manual" />手工添加 {shopping.filter((item) => item.source === "manual").length}</span></div></aside></div>;
+  const rangeMeals = endDate >= startDate ? meals.filter((meal) => meal.date >= startDate && meal.date <= endDate) : [];
+
+  const add = () => {
+    const name = newItem.trim();
+    const amount = Number(newAmount);
+    if (!name) {
+      setRangeError("请先填写采购物品名称");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setRangeError("采购数量必须大于 0");
+      return;
+    }
+    setShopping((items) => [...items, { id: `s-${Date.now()}`, name, amount, unit: newUnit, checked: false, source: "manual" }]);
+    setNewItem("");
+    setNewAmount("1");
+    setRangeError("");
+  };
+
+  const regenerate = () => {
+    try {
+      const result = generateShoppingFromMeals(meals, startDate, endDate, shopping);
+      setShopping(result.items);
+      setRangeError("");
+      notify(result.mealCount === 0 ? "所选日期没有菜单，已保留手工采购项" : `已从 ${result.mealCount} 餐菜单汇总 ${result.generatedCount} 种食材`);
+    } catch (error) {
+      setRangeError(error instanceof Error ? error.message : "无法生成采购清单");
+    }
+  };
+
+  const updateAmount = (id: string, amount: number) => {
+    setShopping((items) => items.map((item) => item.id === id ? { ...item, amount: Number.isFinite(amount) ? Math.max(0, amount) : item.amount } : item));
+  };
+
+  const updateUnit = (id: string, unit: ShoppingItem["unit"]) => {
+    setShopping((items) => items.map((item) => item.id === id ? { ...item, amount: convertShoppingAmount(item.amount, item.unit, unit), unit } : item));
+  };
+
+  return (
+    <div className="shopping-layout">
+      <section className="shopping-hero">
+        <div>
+          <span className="eyebrow">{formatMenuDate(startDate)}—{formatMenuDate(endDate)}</span>
+          <h2>采购清单</h2>
+          <p>{rangeMeals.length} 餐菜单将参与汇总，可修改日期后重新生成。</p>
+        </div>
+        <div className="shopping-score"><strong>{completed}</strong><span>/ {shopping.length} 已购</span></div>
+      </section>
+      <section className="card shopping-list-card">
+        <div className="card-heading"><div><span className="eyebrow">按菜单日期汇总</span><h3>待采购</h3></div></div>
+        <div className="shopping-range">
+          <label><span>开始日期</span><input type="date" value={startDate} onChange={(event) => event.target.value && setStartDate(event.target.value)} /></label>
+          <label><span>结束日期</span><input type="date" value={endDate} onChange={(event) => event.target.value && setEndDate(event.target.value)} /></label>
+          <button className="primary-button" onClick={regenerate}><RefreshCw size={15} />按最新菜单生成</button>
+        </div>
+        {rangeError && <p className="form-error"><CircleAlert size={14} />{rangeError}</p>}
+        <div className="shopping-input">
+          <input value={newItem} onChange={(event) => setNewItem(event.target.value)} onKeyDown={(event) => event.key === "Enter" && add()} placeholder="手工添加，例如：酸奶" aria-label="采购物品名称" />
+          <input className="shopping-add-amount" type="number" min="0.01" step="0.1" value={newAmount} onChange={(event) => setNewAmount(event.target.value)} onKeyDown={(event) => event.key === "Enter" && add()} aria-label="采购数量" />
+          <select value={newUnit} onChange={(event) => setNewUnit(event.target.value as ShoppingItem["unit"])} aria-label="采购单位">{units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select>
+          <button onClick={add}><Plus size={18} />添加</button>
+        </div>
+        <div className="shopping-items">
+          {shopping.map((item) => (
+            <div key={item.id} className={`shopping-item-row ${item.checked ? "checked" : ""}`}>
+              <button className={`shopping-check ${item.checked ? "active" : ""}`} onClick={() => setShopping((items) => items.map((current) => current.id === item.id ? { ...current, checked: !current.checked } : current))} aria-label={item.checked ? `取消勾选${item.name}` : `勾选${item.name}`} aria-pressed={item.checked}><Check size={14} /></button>
+              <span className="item-name"><strong>{item.name}</strong><small>{item.source === "generated" ? "来自所选菜单" : "手工添加"}</small></span>
+              <div className="item-quantity">
+                <input type="number" min="0.01" step="0.1" value={item.amount} onChange={(event) => updateAmount(item.id, event.target.valueAsNumber)} aria-label={`${item.name}采购数量`} />
+                <select value={item.unit} onChange={(event) => updateUnit(item.id, event.target.value as ShoppingItem["unit"])} aria-label={`${item.name}采购单位`}>{units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select>
+              </div>
+              <button className="shopping-delete" onClick={() => setShopping((items) => items.filter((current) => current.id !== item.id))} aria-label={`删除${item.name}`}><Trash2 size={17} /></button>
+            </div>
+          ))}
+          {shopping.length === 0 && <div className="shopping-list-empty"><ShoppingBasket size={24} /><strong>清单还是空的</strong><span>选择包含菜单的日期范围，然后重新生成。</span></div>}
+        </div>
+      </section>
+      <aside className="card shopping-tip">
+        <div className="insight-icon"><Leaf size={20} /></div>
+        <h3>与菜单保持同步</h3>
+        <p>修改菜单后，选择日期范围并重新生成。系统会按实排份量合并同名食材；手工添加的项目和已购状态会保留。</p>
+        <div className="source-legend"><span><i className="generated" />菜单生成 {shopping.filter((item) => item.source === "generated").length}</span><span><i className="manual" />手工添加 {shopping.filter((item) => item.source === "manual").length}</span></div>
+      </aside>
+    </div>
+  );
 }
 
 function FamilyView({ householdName, members, selectedMember, setSelectedMemberId, vitals, setMembers, onEditHousehold, onAddMember, onEditMember, onAddVital, onManageData }: { householdName: string; members: Member[]; selectedMember: Member; setSelectedMemberId: (id: string) => void; vitals: VitalRecord[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; onEditHousehold: () => void; onAddMember: () => void; onEditMember: (member: Member) => void; onAddVital: () => void; onManageData: () => void }) {
